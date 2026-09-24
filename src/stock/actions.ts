@@ -264,3 +264,46 @@ export function deleteAppEvent(id: number): void {
   if (e.source !== "app") throw new StockError("Imported records can't be deleted here");
   db.prepare("DELETE FROM mob_events WHERE id = ?").run(id);
 }
+
+/* ---------------------------------- weigh -------------------------------- */
+
+export interface WeighInput {
+  weight_kg: unknown;
+  /** Assumed daily gain from here on, for projecting weight between weighings. */
+  adg_kg?: unknown;
+  /** How it was weighed: an Optiweigh average, the yard scales, or an eye estimate. */
+  method?: unknown;
+  /** How many head the average came from, where not the whole mob. */
+  head_weighed?: unknown;
+  note?: unknown;
+}
+
+const METHODS = ["optiweigh", "scales", "estimate"];
+
+/**
+ * Records a mob's average weight. That weight is what AE and stocking rates
+ * are worked from until the next one, projected forward by the daily gain
+ * when one is given.
+ */
+export function weighMob(mobId: number, input: WeighInput, when: When, username: string | null): { batch: string } {
+  const v = mobAt(mobId, when);
+  const kg = Number(input.weight_kg);
+  if (!Number.isFinite(kg) || kg <= 0 || kg > 1500) throw new StockError("Enter the average weight in kg");
+  const adg = input.adg_kg === undefined || input.adg_kg === null || input.adg_kg === "" ? null : Number(input.adg_kg);
+  if (adg !== null && (!Number.isFinite(adg) || adg < -3 || adg > 3)) {
+    throw new StockError("Daily gain must be between -3 and 3 kg a day");
+  }
+  const head = input.head_weighed === undefined || input.head_weighed === null || input.head_weighed === ""
+    ? null : Number(input.head_weighed);
+  if (head !== null && (!Number.isInteger(head) || head < 1 || head > v.state.head)) {
+    throw new StockError(`Head weighed must be between 1 and ${v.state.head}`);
+  }
+  const method = METHODS.includes(String(input.method)) ? String(input.method) : null;
+  const note = clean(input.note, 500);
+  const batch = randomUUID();
+  addEvent(mobId, {
+    date: when.date, time: when.time, kind: "weigh", weight_kg: Math.round(kg * 10) / 10, adg_kg: adg,
+    data: { ...(method ? { method } : {}), ...(head !== null ? { head_weighed: head } : {}), ...(note ? { note } : {}) },
+  }, "app", username, batch);
+  return { batch };
+}

@@ -201,6 +201,91 @@ function showError(root, message) {
   body.scrollTop = 0;
 }
 
+/* ------------------------------- weigh dialog ------------------------------ */
+
+/**
+ * A mob's average weight, from Optiweigh, the yard scales or an estimate.
+ * The gain since the last weighing is worked out as you type and can be kept
+ * as the assumed daily gain, which projects the weight forward until the next
+ * weighing — that projected weight is what AE is worked from.
+ */
+export function openWeighDialog(ctx, m) {
+  const dialog = ctx.dialog;
+  dialog.innerHTML = `
+    <div class="dlg narrow">
+      <header>
+        <h2>Record weight</h2>
+        <div class="muted small">${escapeHtml(m.name)} · ${m.head} hd${m.last_weighed ? ` · last ${kg(m.weight_kg)} on ${day(m.last_weighed)}` : ""}</div>
+      </header>
+      <div class="body">
+        <div class="row2">
+          <div class="f"><label for="wKg">Average weight (kg)</label><input id="wKg" type="number" min="1" step="0.1" inputmode="decimal" autocomplete="off"></div>
+          <div class="f"><label for="wHead">Head weighed</label><input id="wHead" type="number" min="1" max="${m.head}" inputmode="numeric" placeholder="all ${m.head}"></div>
+        </div>
+        <div class="f"><label>How</label>
+          <div class="radios">
+            <label class="radio"><input type="radio" name="wHow" value="optiweigh" checked> Optiweigh</label>
+            <label class="radio"><input type="radio" name="wHow" value="scales"> Yard scales</label>
+            <label class="radio"><input type="radio" name="wHow" value="estimate"> Estimate</label>
+          </div>
+        </div>
+        ${whenHtml("w")}
+        <div class="f"><label for="wAdg">Assumed daily gain (kg/day)</label>
+          <input id="wAdg" type="number" step="0.01" min="-3" max="3" inputmode="decimal" placeholder="none: weight stays as weighed">
+          <div class="hint" id="wGain"></div>
+        </div>
+        <div class="f"><label for="wNote">Note</label><input id="wNote" placeholder="optional" autocomplete="off"></div>
+      </div>
+      <footer>
+        <button class="btn" id="wCancel">Cancel</button>
+        <button class="btn primary" id="wGo">Save weight</button>
+      </footer>
+    </div>`;
+
+  // Gain since the last weighing, from the weight and date being entered.
+  const gainHint = () => {
+    const box = $("#wGain", dialog);
+    const kgNow = Number($("#wKg", dialog).value);
+    box.innerHTML = "";
+    if (!kgNow || !m.last_weighed || !m.weight_kg) return;
+    let date = localToday();
+    try { date = readWhen(dialog, "w").date ?? date; } catch { /* keep today */ }
+    const days = Math.round((Date.parse(`${date}T00:00:00`) - Date.parse(`${m.last_weighed}T00:00:00`)) / 86_400_000);
+    if (days < 7) return;
+    const gain = Math.round(((kgNow - m.weight_kg) / days) * 100) / 100;
+    box.innerHTML = `Since ${day(m.last_weighed)} (${days} days): <b>${gain > 0 ? "+" : ""}${gain} kg/day</b> <button class="linkbtn" id="wUse">Use this</button><br><span class="muted">Only a real gain if the mob hasn't had cattle drafted off or merged in since.</span>`;
+    $("#wUse", box).onclick = () => { $("#wAdg", dialog).value = String(gain); };
+  };
+  $("#wKg", dialog).addEventListener("input", gainHint);
+  bindWhen(dialog, "w", gainHint);
+  $("#wCancel", dialog).onclick = () => dialog.close();
+
+  $("#wGo", dialog).onclick = async () => {
+    const btn = $("#wGo", dialog);
+    try {
+      const weight = Number($("#wKg", dialog).value);
+      if (!weight) throw new Error("Enter the average weight in kg");
+      btn.disabled = true;
+      const r = await send("POST", `/api/mobs/${m.id}/weigh`, {
+        weight_kg: weight,
+        head_weighed: $("#wHead", dialog).value || null,
+        method: $('input[name="wHow"]:checked', dialog).value,
+        adg_kg: $("#wAdg", dialog).value === "" ? null : Number($("#wAdg", dialog).value),
+        note: $("#wNote", dialog).value,
+        ...readWhen(dialog, "w"),
+      });
+      dialog.close();
+      await ctx.refresh();
+      undoable(ctx, `${m.name}: ${nf0.format(weight)} kg recorded`, r.batch);
+    } catch (e) {
+      btn.disabled = false;
+      showError(dialog, e.message);
+    }
+  };
+  dialog.showModal();
+  $("#wKg", dialog).focus();
+}
+
 /* --------------------------------- mob page -------------------------------- */
 
 export function mobPageHtml(ctx, m) {
@@ -229,6 +314,7 @@ export function mobPageHtml(ctx, m) {
       ${ctx.canEdit ? `<div class="btns">
         <button class="btn primary" id="mMove">Move…</button>
         <button class="btn" id="mDraft">Draft some off…</button>
+        <button class="btn" id="mWeigh">Record weight…</button>
       </div>
       <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
     </div>
@@ -270,6 +356,8 @@ export function bindMobPage(ctx, m, root) {
     r.checked = true;
     r.dispatchEvent(new Event("change"));
   };
+  const wg = $("#mWeigh", root);
+  if (wg) wg.onclick = () => openWeighDialog(ctx, m);
   const save = $("#mSave", root);
   if (save) save.onclick = async () => {
     try {
@@ -301,7 +389,12 @@ const EVENT_TEXT = {
   death: (e) => `${-e.head_change} died`,
   purchase: (e) => `Bought ${e.head_change} hd`,
   count: (e) => `Recounted: ${e.head} hd`,
-  weigh: (e) => e.weight_kg ? `Weighed · ${nf0.format(e.weight_kg)} kg` : "Weighed (weight not recorded)",
+  weigh: (e) => {
+    if (!e.weight_kg) return "Weighed (weight not recorded)";
+    const how = { optiweigh: "Optiweigh", scales: "yard scales", estimate: "estimate" }[e.method];
+    const extra = [how, e.head_weighed ? `${e.head_weighed} hd weighed` : null, e.adg_kg ? `${e.adg_kg > 0 ? "+" : ""}${e.adg_kg} kg/day assumed` : null].filter(Boolean);
+    return `Weighed · ${nf0.format(e.weight_kg)} kg${extra.length ? ` (${extra.join(", ")})` : ""}`;
+  },
 };
 
 async function loadMobEvents(ctx, id, root) {

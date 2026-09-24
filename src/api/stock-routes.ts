@@ -12,8 +12,8 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
-  deleteAppEvent, draftMob, moveMobs, parseWhen, setGate, StockError, undoBatch,
-  type DraftInput, type GateInput,
+  deleteAppEvent, draftMob, moveMobs, parseWhen, setGate, StockError, undoBatch, weighMob,
+  type DraftInput, type GateInput, type WeighInput,
 } from "../stock/actions.js";
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
 import { getFeature } from "../map/store.js";
@@ -152,6 +152,15 @@ stockApi.post("/mobs/:id/draft", requireAdmin, (req, res) => {
   });
 });
 
+stockApi.post("/mobs/:id/weigh", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = weighMob(Number(req.params["id"]), b as unknown as WeighInput, parseWhen(b["date"], b["time"]), who(req));
+    logAction(req, `recorded ${String(b["weight_kg"])} kg for mob #${req.params["id"]}`);
+    return r;
+  });
+});
+
 stockApi.post("/undo/:batch", requireAdmin, (req, res) => {
   act(res, () => {
     const r = undoBatch(String(req.params["batch"]));
@@ -239,13 +248,14 @@ stockApi.get("/mobs/:id/events", (req, res) => {
   const mobName = new Map((db.prepare("SELECT id, name FROM mobs").all() as Array<{ id: number; name: string }>).map((m) => [m.id, m.name]));
   const rows = db.prepare(
     `SELECT * FROM mob_events WHERE mob_id = ? ORDER BY ${EVENT_ORDER}`
-  ).all(id) as Array<{ id: number; date: string; time: string | null; batch: string | null; kind: string; head: number | null; head_change: number | null; weight_kg: number | null; paddock_ids: string | null; data: string; source: string }>;
+  ).all(id) as Array<{ id: number; date: string; time: string | null; batch: string | null; kind: string; head: number | null; head_change: number | null; weight_kg: number | null; adg_kg: number | null; paddock_ids: string | null; data: string; source: string }>;
   rows.reverse(); // newest first
   res.json(rows.map((e) => {
     const data = JSON.parse(e.data) as Record<string, unknown>;
     return {
       id: e.id, time: e.time, batch: e.batch,
       reason: data["reason"] ?? null, gate_name: data["gate_name"] ?? null,
+      method: data["method"] ?? null, head_weighed: data["head_weighed"] ?? null, adg_kg: e.adg_kg ?? null,
       date: e.date, kind: e.kind, head: e.head, head_change: e.head_change, weight_kg: e.weight_kg,
       paddocks: e.paddock_ids ? (JSON.parse(e.paddock_ids) as number[]).map((p) => byId.get(p)?.row.name ?? `#${p}`) : null,
       agriwebb_event: data["agriwebb_event"] ?? null,
