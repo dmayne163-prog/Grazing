@@ -132,10 +132,43 @@ function setFeatures(features) {
   refreshSearch();
 }
 
+/**
+ * Which paddocks are open into which. Two things join paddocks: a gate
+ * recorded as open, and a mob whose access covers several paddocks — the
+ * second catches groups whose gates have not been recorded yet. Returns
+ * paddock id → the other paddocks in its group.
+ */
+function openGroups() {
+  const parent = new Map();
+  const root = (x) => { while (parent.has(x) && parent.get(x) !== x) x = parent.get(x); return x; };
+  const join = (a, b) => { const ra = root(a), rb = root(b); if (ra !== rb) parent.set(ra, rb); };
+  for (const g of state.gates) {
+    if (g.state === "open" && g.paddocks.length === 2) join(g.paddocks[0], g.paddocks[1]);
+  }
+  for (const mob of state.mobs) {
+    for (let i = 1; i < mob.paddock_ids.length; i++) join(mob.paddock_ids[0], mob.paddock_ids[i]);
+  }
+  const members = new Map();
+  const ids = new Set([...parent.keys(), ...parent.values()]);
+  for (const id of ids) {
+    const r = root(id);
+    if (!members.has(r)) members.set(r, []);
+    members.get(r).push(id);
+  }
+  const out = new Map();
+  for (const list of members.values()) {
+    if (list.length < 2) continue;
+    for (const id of list) out.set(id, list.filter((x) => x !== id));
+  }
+  return out;
+}
+
 /** Mob icons and gate colours, redrawn whenever the stock or the map changes. */
 function drawStock() {
   if (!farm) return;
   farm.setGateStates(state.gates);
+  state.openGroups = openGroups();
+  farm.setOpenGroups(state.openGroups);
   mobLayer?.setMobs(state.mobs, state.features.filter((f) => f.properties.kind === "paddock"));
 }
 
@@ -445,7 +478,8 @@ function layersHtml() {
         Mobs
         <span class="count">${state.mobs.length}</span>
       </label>
-    <p class="muted small gap-top">Imagery is chosen with the layers button at the bottom-left of the map.</p>`;
+    <p class="muted small gap-top"><span class="swatch" data-colour="#5FBE8E"></span>A green outline marks paddocks open into each other; green gates are open.</p>
+    <p class="muted small">Imagery is chosen with the layers button at the bottom-left of the map.</p>`;
 }
 
 function toolsHtml() {
@@ -691,6 +725,11 @@ function featureHtml(f) {
 
   const facts = [];
   if (p.area_ha != null) facts.push(["Mapped area", ha(p.area_ha)]);
+  const openTo = p.kind === "paddock" ? state.openGroups?.get(f.id) : null;
+  if (openTo?.length) {
+    const via = state.gates.filter((g) => g.state === "open" && g.paddocks.includes(f.id)).map((g) => g.name);
+    facts.push(["Open to", `<span class="inuse">${openTo.map((id) => escapeHtml(state.byId.get(id)?.properties.name ?? "")).join(", ")}</span>${via.length ? ` <span class="muted">via ${via.map(escapeHtml).join(", ")}</span>` : ""}`]);
+  }
   if (props.grazable_ha) facts.push(["Grazable", ha(Number(props.grazable_ha))]);
   if (props.agriwebb_area_ha) facts.push(["AgriWebb said", ha(Number(props.agriwebb_area_ha))]);
   if (p.length_m != null) facts.push(["Length", km(p.length_m)]);

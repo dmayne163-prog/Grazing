@@ -46,11 +46,15 @@ function pathStyle(f, selected) {
   let s;
   switch (kind) {
     case "paddock":
-      s = {
-        color: colour, weight: 1.6, opacity: 0.95,
-        fillColor: colour,
-        fillOpacity: subtype === "cultivation" || subtype === "holding" ? 0.12 : 0.03,
-      };
+      s = openGroup.has(f.id)
+        // Open into another paddock: green, like an open gate, so a set of
+        // paddocks with the gates open between them reads as one.
+        ? { color: OPEN, weight: 3, opacity: 1, fillColor: OPEN, fillOpacity: 0.16 }
+        : {
+          color: colour, weight: 1.6, opacity: 0.95,
+          fillColor: colour,
+          fillOpacity: subtype === "cultivation" || subtype === "holding" ? 0.12 : 0.03,
+        };
       break;
     case "boundary":
       s = { color: colour, weight: 3, dashArray: "10 6", fill: false };
@@ -88,10 +92,14 @@ function pathStyle(f, selected) {
 /** Gate id → "open" | "closed", set from the server. */
 let gateStates = new Map();
 
+/** Paddock id → the other paddocks it is open into. */
+let openGroup = new Map();
+const OPEN = "#5FBE8E";
+
 function pointStyle(f, selected) {
   const { kind, subtype } = f.properties;
   const openGate = subtype === "gate" && gateStates.get(f.id) === "open";
-  const colour = openGate ? "#5FBE8E" : kindColour(kind, subtype);
+  const colour = openGate ? OPEN : kindColour(kind, subtype);
   const radius = openGate ? 5.5 : kind === "infrastructure" && subtype === "gate" ? 3.5
     : subtype === "tank" || subtype === "bore" || subtype === "dam" ? 6
     : 5;
@@ -276,6 +284,20 @@ export class FarmMap {
     for (const layer of this.layersById.values()) {
       if (layer.feature.properties.subtype === "gate") restyle(layer, layer.feature.id === this.selectedId);
     }
+  }
+
+  /** Paddocks open into each other; see openGroups() in main.js. */
+  setOpenGroups(map) {
+    const changed = new Set([...openGroup.keys(), ...map.keys()]);
+    openGroup = map;
+    for (const id of changed) {
+      const layer = this.layersById.get(id);
+      if (layer) restyle(layer, id === this.selectedId);
+    }
+    // On top of their neighbours, or a shared fence is drawn in the
+    // neighbour's colour and the green edge is lost along it.
+    for (const id of openGroup.keys()) this.layersById.get(id)?.bringToFront();
+    if (this.selectedId !== null) this.layersById.get(this.selectedId)?.bringToFront?.();
   }
 
   /* ----------------------------- drop target ------------------------------ */
