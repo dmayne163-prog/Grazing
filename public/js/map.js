@@ -85,10 +85,14 @@ function pathStyle(f, selected) {
   return s;
 }
 
+/** Gate id → "open" | "closed", set from the server. */
+let gateStates = new Map();
+
 function pointStyle(f, selected) {
   const { kind, subtype } = f.properties;
-  const colour = kindColour(kind, subtype);
-  const radius = kind === "infrastructure" && subtype === "gate" ? 3.5
+  const openGate = subtype === "gate" && gateStates.get(f.id) === "open";
+  const colour = openGate ? "#5FBE8E" : kindColour(kind, subtype);
+  const radius = openGate ? 5.5 : kind === "infrastructure" && subtype === "gate" ? 3.5
     : subtype === "tank" || subtype === "bore" || subtype === "dam" ? 6
     : 5;
   return {
@@ -184,11 +188,12 @@ export class FarmMap {
     layer.feature = f;
 
     if (f.properties.kind === "paddock" && f.properties.name) {
-      const extra = this.labelExtra ? this.labelExtra(f) : "";
-      const ha = f.properties.area_ha != null ? ` <span class="ha">${Math.round(f.properties.area_ha)} ha${escapeHtml(extra)}</span>` : "";
-      layer.bindTooltip(`${escapeHtml(f.properties.name)}${ha}`, {
-        permanent: true, direction: "center", className: "plabel", interactive: false,
-      });
+      const ha = f.properties.area_ha != null ? ` <span class="ha">${Math.round(f.properties.area_ha)} ha</span>` : "";
+      // Standalone rather than bound to the polygon: a bound label sits at the
+      // polygon's centroid, which for an L-shaped paddock is outside it.
+      layer._label = L.tooltip({ permanent: true, direction: "center", className: "plabel", interactive: false })
+        .setLatLng(interiorPoint(f.geometry))
+        .setContent(`${escapeHtml(f.properties.name)}${ha}`);
     } else if (f.properties.name) {
       layer.bindTooltip(escapeHtml(f.properties.name), { direction: "top", offset: [0, -6] });
     }
@@ -209,6 +214,7 @@ export class FarmMap {
     if (!g) return;
     const layer = this.makeLayer(f);
     g.addLayer(layer);
+    if (layer._label) g.addLayer(layer._label);
     this.layersById.set(f.id, layer);
   }
 
@@ -222,7 +228,10 @@ export class FarmMap {
   removeFeature(id) {
     const layer = this.layersById.get(id);
     if (!layer) return;
-    for (const g of this.groups.values()) g.removeLayer(layer);
+    for (const g of this.groups.values()) {
+      g.removeLayer(layer);
+      if (layer._label) g.removeLayer(layer._label);
+    }
     this.layersById.delete(id);
   }
 
@@ -258,6 +267,27 @@ export class FarmMap {
     if (all.getLayers().length === 0) return false;
     this.map.fitBounds(all.getBounds(), { padding: [20, 20] });
     return true;
+  }
+
+  /* -------------------------------- gates -------------------------------- */
+
+  setGateStates(list) {
+    gateStates = new Map(list.map((g) => [g.gate_id, g.state]));
+    for (const layer of this.layersById.values()) {
+      if (layer.feature.properties.subtype === "gate") restyle(layer, layer.feature.id === this.selectedId);
+    }
+  }
+
+  /* ----------------------------- drop target ------------------------------ */
+
+  /** Outlines the paddock a mob is being dragged over; null clears it. */
+  hoverPaddock(id) {
+    if (this._hover === id) return;
+    const prev = this._hover != null ? this.layersById.get(this._hover) : null;
+    if (prev) restyle(prev, prev.feature.id === this.selectedId);
+    this._hover = id;
+    const layer = id != null ? this.layersById.get(id) : null;
+    if (layer) layer.setStyle({ color: "#5FBE8E", weight: 4, fillColor: "#5FBE8E", fillOpacity: 0.18, dashArray: "8 5" });
   }
 
   /* ------------------------------ visibility ----------------------------- */
@@ -314,6 +344,66 @@ function restyle(layer, selected) {
   const f = layer.feature;
   if (f.geometry.type === "Point") layer.setStyle(pointStyle(f, selected));
   else layer.setStyle(pathStyle(f, selected));
+}
+
+/* ------------------------------ interior point ----------------------------- */
+
+// Keyed by the geometry object: a saved edit arrives as a new object, so a
+// reshaped paddock is recomputed and an unchanged one is not.
+const interiorCache = new WeakMap();
+
+/**
+ * A point well inside a polygon, for its label and its mobs — the centroid
+ * falls outside an L- or C-shaped paddock. A coarse grid search for the
+ * spot furthest from any edge, refined once around the best cell: plenty for
+ * placing a label, and cheap for fifty paddocks.
+ */
+export function interiorPoint(geometry) {
+  if (interiorCache.has(geometry)) return interiorCache.get(geometry);
+  const polys = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  // The largest part, by bounding box.
+  let best = polys[0];
+  let bestSpan = -1;
+  for (const p of polys) {
+    const xs = p[0].map((c) => c[0]), ys = p[0].map((c) => c[1]);
+    const span = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    if (span > bestSpan) { bestSpan = span; best = p; }
+  }
+  const ring = best[0];
+  const kx = Math.cos((ring[0][1] * Math.PI) / 180);
+  const edgeDist = (x, y) => {
+    let d = Infinity;
+    for (const r of best) {
+      for (let i = 1; i < r.length; i++) {
+        const [ax, ay] = r[i - 1], [bx, by] = r[i];
+        const dx = (bx - ax) * kx, dy = by - ay;
+        const px = (x - ax) * kx, py = y - ay;
+        const len = dx * dx + dy * dy;
+        const t = len ? Math.max(0, Math.min(1, (px * dx + py * dy) / len)) : 0;
+        d = Math.min(d, Math.hypot(px - t * dx, py - t * dy));
+      }
+    }
+    return d;
+  };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of ring) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  let pick = null, pickD = -1;
+  const search = (x0, x1, y0, y1, n) => {
+    for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) {
+      const x = x0 + ((x1 - x0) * i) / n, y = y0 + ((y1 - y0) * j) / n;
+      if (!inPolygon(x, y, best)) continue;
+      const d = edgeDist(x, y);
+      if (d > pickD) { pickD = d; pick = [x, y]; }
+    }
+  };
+  search(minX, maxX, minY, maxY, 16);
+  if (pick) {
+    const wx = (maxX - minX) / 16, wy = (maxY - minY) / 16;
+    search(pick[0] - wx, pick[0] + wx, pick[1] - wy, pick[1] + wy, 8);
+  }
+  const out = pick ? [pick[1], pick[0]] : [(minY + maxY) / 2, (minX + maxX) / 2];
+  interiorCache.set(geometry, out);
+  return out;
 }
 
 /* ----------------------------- point in polygon ---------------------------- */

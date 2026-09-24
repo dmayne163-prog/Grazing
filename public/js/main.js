@@ -4,6 +4,8 @@ import { Editor } from "./editor.js";
 import { openImport } from "./importer.js";
 import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
+import { MobLayer } from "./moblayer.js";
+import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
 import { escapeHtml, FarmMap, featureAt, kindColour, localGet, localSet } from "./map.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -25,9 +27,23 @@ const state = {
   /** Rest and use per paddock id, and when the stock records begin. */
   grazing: new Map(),
   recordsBegin: null,
+  gates: [],
 };
 
-let farm, editor;
+let farm, editor, mobLayer;
+
+/** What the stock screens need from here; see stockui.js. */
+const ctx = {
+  state,
+  get canEdit() { return canEdit(); },
+  get dialog() { return $("#dialog"); },
+  toast: (...a) => toast(...a),
+  select: (...a) => select(...a),
+  selectMob: (...a) => selectMob(...a),
+  backToMobs: () => { state.selectedMobId = null; state.tab = "mobs"; render(); },
+  /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
+  refresh: async () => { await loadStock(); render(); },
+};
 
 /* --------------------------------- format ---------------------------------- */
 
@@ -69,11 +85,15 @@ async function loadFeatures() {
 
 async function loadStock() {
   try {
-    const [mobs, stock, grazing] = await Promise.all([get("/api/mobs"), get("/api/stock"), get("/api/grazing")]);
+    const [mobs, stock, grazing, gates] = await Promise.all([
+      get("/api/mobs"), get("/api/stock"), get("/api/grazing"), get("/api/gates"),
+    ]);
     state.mobs = mobs;
     state.stock = new Map(stock.map((s) => [s.paddock_id, s]));
     state.grazing = new Map(grazing.paddocks.map((g) => [g.paddock_id, g]));
     state.recordsBegin = grazing.records_begin;
+    state.gates = gates;
+    drawStock();
   } catch {
     // The map is still worth showing without the stock on it.
   }
@@ -108,7 +128,15 @@ function setFeatures(features) {
   state.byId = new Map(features.map((f) => [f.id, f]));
   if (state.selectedId !== null && !state.byId.has(state.selectedId)) state.selectedId = null;
   farm.setFeatures(features);
+  drawStock();
   refreshSearch();
+}
+
+/** Mob icons and gate colours, redrawn whenever the stock or the map changes. */
+function drawStock() {
+  if (!farm) return;
+  farm.setGateStates(state.gates);
+  mobLayer?.setMobs(state.mobs, state.features.filter((f) => f.properties.kind === "paddock"));
 }
 
 function upsert(f) {
@@ -270,8 +298,8 @@ function render() {
   if (state.mode === "new" || state.mode === "split-name") return; // their own forms are showing
   const mob = state.selectedMobId !== null ? mobById(state.selectedMobId) : null;
   if (mob) {
-    body.innerHTML = mobHtml(mob);
-    bindMob(mob);
+    body.innerHTML = mobPageHtml(ctx, mob);
+    bindMobPage(ctx, mob, body);
     return;
   }
   const f = state.selectedId !== null ? state.byId.get(state.selectedId) : null;
@@ -411,6 +439,12 @@ function layersHtml() {
           <span class="count">${counts.get(k.id) || 0}</span>
         </label>`).join("")}
     </div>
+      <label>
+        <input type="checkbox" data-mobs ${localGet("hideMobs") === "1" ? "" : "checked"}>
+        <span class="swatch" data-colour="#4FA9D6"></span>
+        Mobs
+        <span class="count">${state.mobs.length}</span>
+      </label>
     <p class="muted small gap-top">Imagery is chosen with the layers button at the bottom-left of the map.</p>`;
 }
 
@@ -478,6 +512,11 @@ function bindOverview() {
   body.querySelectorAll("[data-layer]").forEach((cb) => {
     cb.onchange = () => farm.setKindVisible(cb.dataset.layer, cb.checked);
   });
+  const mobsToggle = $("[data-mobs]", body);
+  if (mobsToggle) mobsToggle.onchange = () => {
+    localSet("hideMobs", mobsToggle.checked ? "0" : "1");
+    mobLayer.setVisible(mobsToggle.checked);
+  };
   paintSwatches(body);
 
   const imp = $("#importBtn", body);
@@ -668,6 +707,7 @@ function featureHtml(f) {
     <button class="linkbtn back" id="back">← All paddocks</button>
     <h2>${escapeHtml(p.name || "(unnamed)")}</h2>
     <p class="sub"><span class="swatch" data-colour="${kindColour(p.kind, p.subtype)}"></span>${escapeHtml(kindLabel(p.kind))}${p.subtype ? ` · ${escapeHtml(p.subtype)}` : ""}</p>
+    ${p.subtype === "gate" ? gatePanelHtml() : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${p.kind === "paddock" ? stockHtml(f) : ""}
     ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
@@ -693,6 +733,7 @@ function bindFeature(f) {
   });
   $("#back").onclick = () => select(null);
   if (f.properties.kind === "paddock") loadGrazing(f);
+  if (f.properties.subtype === "gate") loadGatePanel(ctx, f, body);
   loadHistory(f.id);
   if (!canEdit()) return;
 
@@ -904,10 +945,14 @@ async function start() {
   });
   editor = new Editor(farm.map);
 
-  farm.labelExtra = (f) => {
-    const s = state.stock.get(f.id);
-    return s && s.head ? ` · ${s.head} hd` : "";
-  };
+  mobLayer = new MobLayer(farm, {
+    canEdit: m.canEdit,
+    isBusy: () => state.mode !== null,
+    onSelect: (mob) => selectMob(mob.id),
+    onDrop: (mob, paddock) => openMoveDialog(ctx, mob, paddock),
+    onMiss: () => toast("Drop the mob inside a paddock", { error: true }),
+  });
+  if (localGet("hideMobs") === "1") mobLayer.setVisible(false);
   await loadStock();
   try {
     await loadFeatures();
@@ -1016,153 +1061,6 @@ function stockHtml(f) {
     ${shared.length ? `<p class="muted small">Stocking rate spreads each mob over every paddock it can reach.</p>` : ""}`;
 }
 
-function mobHtml(m) {
-  const facts = [
-    ["Head", String(m.head)],
-    ["Where", m.paddocks.map((p) => `<button class="linkbtn" data-paddock="${p.id}">${escapeHtml(p.name)}</button>`).join(", ") || "—"],
-    ["Owner", m.owner ? escapeHtml(m.owner) : "Own stock"],
-    ["Breed", escapeHtml(m.breed || "—")],
-    ["Class", escapeHtml([m.age_class, m.sex].filter(Boolean).join(" · ") || "—")],
-    ["Born", escapeHtml(m.birth_date || "—")],
-    ["Origin", escapeHtml(m.origin || "—")],
-    ["Tag colour", escapeHtml(m.tag_colour || "—")],
-    ["Last weighed", m.last_weighed ? `${kg(m.weight_kg)} on ${escapeHtml(m.last_weighed)}` : "—"],
-    ["Daily gain", m.adg_kg ? `${m.adg_kg} kg/day (assumed)` : "none set"],
-    ["Weight today", kg(m.est_weight_kg)],
-    ["AE per head", m.ae_head != null ? m.ae_head.toFixed(2) : "—"],
-    ["AE total", m.ae_total != null ? nf1.format(m.ae_total) : "—"],
-  ];
-  if (m.agriwebb_ae_head != null) facts.push(["AgriWebb AE/head", m.agriwebb_ae_head.toFixed(2)]);
-  return `
-    <button class="linkbtn back" id="back">← All mobs</button>
-    <h2>${escapeHtml(m.name)}</h2>
-    <p class="sub">${escapeHtml(m.species)}${m.owner ? ` · agistment, ${escapeHtml(m.owner)}` : ""}</p>
-    <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-    ${canEdit() ? `
-      <h3>Details</h3>
-      <div class="f"><label for="mName">Name</label><input id="mName" value="${escapeHtml(m.name)}" autocomplete="off"></div>
-      <div class="row2">
-        <div class="f"><label for="mOwner">Owner</label>
-          <input id="mOwner" value="${escapeHtml(m.owner || "")}" placeholder="own stock" list="mOwners" autocomplete="off">
-          <datalist id="mOwners">${[...new Set(state.mobs.map((x) => x.owner).filter(Boolean))].map((o) => `<option value="${escapeHtml(o)}">`).join("")}</datalist>
-          <div class="hint">Blank for your own cattle; the owner's name for agistment.</div>
-        </div>
-        <div class="f"><label for="mSex">Sex</label>
-          <select id="mSex">${["", "female", "steer", "male"].map((v) => `<option value="${v}"${v === (m.sex || "") ? " selected" : ""}>${v || "mixed / unknown"}</option>`).join("")}</select>
-        </div>
-      </div>
-      <div class="f"><label for="mDesc">Description</label><textarea id="mDesc">${escapeHtml(m.description || "")}</textarea></div>
-      <div class="btns"><button class="btn primary" id="mSave">Save</button></div>
-      ${moveFormHtml(m)}`
-    : m.description ? `<h3>Description</h3><p>${escapeHtml(m.description)}</p>` : ""}
-    <h3>History</h3>
-    <ul class="history" id="mobEvents"><li class="muted">Loading…</li></ul>
-    <p class="muted small gap-top">Weighing, counting and splitting mobs come next.</p>`;
-}
-
-function localToday() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/**
- * Moving a mob and opening gates are one action: tick every paddock it can
- * reach from that date. Ticked paddocks sort to the top so the current
- * position is always visible without scrolling through all of them.
- */
-function moveFormHtml(m) {
-  const paddocks = state.features
-    .filter((f) => f.properties.kind === "paddock")
-    .sort((a, b) => {
-      const ai = m.paddock_ids.includes(a.id) ? 0 : 1, bi = m.paddock_ids.includes(b.id) ? 0 : 1;
-      return ai - bi || a.properties.name.localeCompare(b.properties.name, "en", { numeric: true });
-    });
-  const others = (id) => {
-    const h = state.mobs.filter((x) => x.id !== m.id && x.paddock_ids.includes(id)).reduce((t, x) => t + x.head, 0);
-    return h ? ` <span class="muted">· ${h} hd other stock</span>` : "";
-  };
-  return `
-    <h3>Move or open gates</h3>
-    <div class="row2">
-      <div class="f"><label for="mvDate">From</label><input id="mvDate" type="date" value="${localToday()}" max="${localToday()}"></div>
-      <div class="f"><label for="mvFilter">Find paddock</label><input id="mvFilter" type="search" placeholder="Filter…" autocomplete="off"></div>
-    </div>
-    <div class="checklist" id="mvList">${paddocks.map((f) => `
-      <label data-name="${escapeHtml(f.properties.name.toLowerCase())}">
-        <input type="checkbox" value="${f.id}"${m.paddock_ids.includes(f.id) ? " checked" : ""}>
-        ${escapeHtml(f.properties.name)} <span class="muted">${ha(grazable(f))}</span>${others(f.id)}
-      </label>`).join("")}
-    </div>
-    <p class="muted small" id="mvSummary"></p>
-    <div class="f"><label for="mvNote">Note</label><input id="mvNote" placeholder="optional" autocomplete="off"></div>
-    <div class="btns"><button class="btn primary" id="mvSave">Record move</button></div>`;
-}
-
-function bindMob(m) {
-  loadMobEvents(m.id);
-  const list = $("#mvList");
-  if (list) {
-    // Order matters: the first paddock is where the head is counted, so the
-    // current one keeps that place and new ones follow in the order ticked.
-    const chosen = [...m.paddock_ids];
-    const areaOf = (id) => { const f = state.byId.get(id); return f ? grazable(f) || 0 : 0; };
-    const summary = () => {
-      const area = chosen.reduce((t, id) => t + areaOf(id), 0);
-      $("#mvSummary").textContent = chosen.length
-        ? `${chosen.length} paddock${chosen.length === 1 ? "" : "s"}, ${ha(area)}${m.ae_total && area ? ` → ${(m.ae_total / area).toFixed(2)} AE/ha for this mob` : ""}`
-        : "Tick at least one paddock.";
-    };
-    list.addEventListener("change", (e) => {
-      const id = Number(e.target.value);
-      const i = chosen.indexOf(id);
-      if (e.target.checked && i < 0) chosen.push(id);
-      if (!e.target.checked && i >= 0) chosen.splice(i, 1);
-      summary();
-    });
-    $("#mvFilter").addEventListener("input", (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      list.querySelectorAll("label").forEach((l) => {
-        l.hidden = q !== "" && !l.dataset.name.includes(q) && !l.querySelector("input").checked;
-      });
-    });
-    $("#mvSave").onclick = async () => {
-      try {
-        await send("POST", `/api/mobs/${m.id}/move`, {
-          date: $("#mvDate").value, paddock_ids: chosen, note: $("#mvNote").value,
-        });
-        await loadStock();
-        farm.setFeatures(state.features); // relabel head counts
-        render();
-        toast("Move recorded");
-      } catch (e) {
-        toast(e.message, { error: true });
-      }
-    };
-    summary();
-  }
-  const save = $("#mSave");
-  if (save) save.onclick = async () => {
-    try {
-      await send("PATCH", `/api/mobs/${m.id}`, {
-        name: $("#mName").value, owner: $("#mOwner").value, sex: $("#mSex").value, description: $("#mDesc").value,
-      });
-      await loadStock();
-      render();
-      toast("Saved");
-    } catch (e) {
-      toast(e.message, { error: true });
-    }
-  };
-  $("#back").onclick = () => {
-    state.selectedMobId = null;
-    state.tab = "mobs";
-    render();
-  };
-  $("#panelBody").querySelectorAll("[data-paddock]").forEach((el) => {
-    el.onclick = () => select(Number(el.dataset.paddock), { zoom: true });
-  });
-}
-
 /* ----------------------------- grazing history ----------------------------- */
 
 /** "12 Nov – 11 Dec 2025", "10 Dec 2025 – 4 Feb 2026", "24 Sept 2026 – now". */
@@ -1224,38 +1122,4 @@ async function loadGrazing(f) {
       else toast("That mob has since been sold or merged; its record is kept but is not in the current list.");
     };
   });
-}
-
-const EVENT_TEXT = {
-  opening: (e) => e.agriwebb_event === "Created from draft/split" ? `Drafted off${e.from_mob ? ` from ${e.from_mob}` : ""} · ${e.head} hd`
-    : e.agriwebb_event === "Purchased" ? `Purchased · ${e.head} hd`
-    : e.source.startsWith("import:") ? `AgriWebb mob list: ${e.head} hd`
-    : `Started · ${e.head} hd`,
-  move: () => "Moved",
-  transfer: (e) => e.off_farm ? `Transferred off farm · ${Math.abs(e.head_change)} hd`
-    : e.head_change < 0 ? `Drafted ${-e.head_change} hd${e.to_mob ? ` to ${e.to_mob}` : ""}${e.to_paddock ? ` (${e.to_paddock})` : ""}`
-    : `Merged in ${e.head_change} hd${e.from_mob ? ` from ${e.from_mob}` : ""}`,
-  sale: (e) => `Sold ${-e.head_change} hd`,
-  death: (e) => `${-e.head_change} died`,
-  purchase: (e) => `Bought ${e.head_change} hd`,
-  count: (e) => `Recounted: ${e.head} hd`,
-  weigh: (e) => e.weight_kg ? `Weighed · ${nf0.format(e.weight_kg)} kg` : "Weighed (weight not recorded)",
-};
-
-async function loadMobEvents(id) {
-  const el = $("#mobEvents");
-  try {
-    const all = await get(`/api/mobs/${id}/events`);
-    if (!el || state.selectedMobId !== id) return;
-    // AgriWebb's history notes a weighing without its weight; when the mob list
-    // supplies the weight for the same day, show that one only.
-    const weighed = new Set(all.filter((e) => e.kind === "weigh" && e.weight_kg).map((e) => e.date));
-    const events = all.filter((e) => !(e.kind === "weigh" && !e.weight_kg && weighed.has(e.date)));
-    el.innerHTML = events.map((e) => `
-      <li><span class="when">${day(e.date)}</span>
-      <span>${escapeHtml((EVENT_TEXT[e.kind] || (() => e.kind))(e))}${e.paddocks ? ` → ${escapeHtml(e.paddocks.join(", "))}` : ""}</span></li>`).join("")
-      || '<li class="muted">Nothing recorded.</li>';
-  } catch {
-    if (el) el.innerHTML = '<li class="muted">History is not available offline.</li>';
-  }
 }

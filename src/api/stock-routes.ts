@@ -4,17 +4,25 @@ import { addEvent, db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { ImportError } from "../map/importers.js";
 import { listFeatures, updateFeature, type FeatureRow } from "../map/store.js";
+
+const listFeaturesOfKind = (kind: string) => listFeatures().filter((f) => f.kind === kind);
 import {
   asOfFromFilename, parseAgriWebbSheet, reviewMobs,
   type MobCandidate, type MovementRow, type PaddockRowCandidate, type RainRow,
 } from "../stock/agriwebb-xlsx.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
+  deleteAppEvent, draftMob, moveMobs, parseWhen, setGate, StockError, undoBatch,
+  type DraftInput, type GateInput,
+} from "../stock/actions.js";
+import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
+import { getFeature } from "../map/store.js";
+import {
   commitHistory, historyAlreadyImported, planHistory, replayMovements,
 } from "../stock/agriwebb-history.js";
 import {
-  createMobWithEvents, mobViews, moveMob, paddockHistories, paddockStock, recordsBegin,
-  StockError, today, updateMob, type EventInput,
+  createMobWithEvents, EVENT_ORDER, mobViews, paddockHistories, paddockStock, recordsBegin,
+  today, updateMob, type EventInput,
 } from "../stock/store.js";
 
 const log = logger("stock");
@@ -93,30 +101,134 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-stockApi.post("/mobs/:id/move", requireAdmin, (req, res) => {
-  const id = Number(req.params["id"]);
-  const b = (req.body ?? {}) as { date?: unknown; paddock_ids?: unknown; note?: unknown };
+/* -------------------------------- actions -------------------------------- */
+
+/** Runs an action, mapping its errors onto a 400 with the message. */
+function act(res: import("express").Response, fn: () => unknown) {
   try {
-    moveMob(
-      id,
-      typeof b.date === "string" ? b.date : today(),
-      Array.isArray(b.paddock_ids) ? (b.paddock_ids as number[]) : [],
-      typeof b.note === "string" && b.note.trim() ? b.note.trim().slice(0, 500) : null,
-      who(req)
-    );
-    const v = mobViews().find((x) => x.mob.id === id);
-    const { byId } = paddockIndex();
-    const where = v?.state.paddock_ids.map((p) => byId.get(p)?.row.name ?? p).join(", ") ?? "";
-    log.info(`${who(req)} moved ${v?.mob.name} to ${where}`);
-    addEvent({
-      ts: Date.now(), source: "stock", kind: "move", severity: "info",
-      message: `${who(req)} moved ${v?.mob.name} to ${where}`, value: null,
-    });
-    res.json({ ok: true });
+    res.json({ ok: true, ...(fn() as object) });
   } catch (e) {
     if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
-    log.error("move failed", e);
-    res.status(500).json({ error: "Something went wrong recording the move" });
+    log.error("action failed", e);
+    res.status(500).json({ error: "Something went wrong recording that" });
+  }
+}
+
+function logAction(req: Request, message: string) {
+  log.info(`${who(req)} ${message}`);
+  addEvent({ ts: Date.now(), source: "stock", kind: "action", severity: "info", message: `${who(req)} ${message}`, value: null });
+}
+
+const nameOf = (id: number) => getFeature(id)?.name ?? `#${id}`;
+const noteOf = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 500) : null);
+
+/** Moves one mob, or several together, to a paddock or a set with gates open between. */
+stockApi.post("/actions/move", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const ids = Array.isArray(b["mob_ids"]) ? (b["mob_ids"] as unknown[]).map(Number) : [];
+    const when = parseWhen(b["date"], b["time"]);
+    const batch = moveMobs(ids, b["to"], when, noteOf(b["note"]), who(req));
+    const to = Array.isArray(b["to"]) ? (b["to"] as unknown[]).map(Number).map(nameOf).join(", ") : "";
+    logAction(req, `moved ${ids.length} mob(s) to ${to} (${when.date} ${when.time ?? ""})`);
+    return { batch };
+  });
+});
+
+/** The older one-mob move, kept so nothing that calls it breaks. */
+stockApi.post("/mobs/:id/move", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => ({
+    batch: moveMobs([Number(req.params["id"])], b["paddock_ids"], parseWhen(b["date"], b["time"]), noteOf(b["note"]), who(req)),
+  }));
+});
+
+stockApi.post("/mobs/:id/draft", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = draftMob(Number(req.params["id"]), b as unknown as DraftInput, parseWhen(b["date"], b["time"]), who(req));
+    logAction(req, `drafted ${String(b["head"])} hd off mob #${req.params["id"]} into mob #${r.mob_id}`);
+    return r;
+  });
+});
+
+stockApi.post("/undo/:batch", requireAdmin, (req, res) => {
+  act(res, () => {
+    const r = undoBatch(String(req.params["batch"]));
+    logAction(req, `undid an action (${r.events} record(s), ${r.mobs} mob(s), ${r.gates} gate change(s))`);
+    return r;
+  });
+});
+
+stockApi.delete("/mob-events/:id", requireAdmin, (req, res) => {
+  act(res, () => {
+    deleteAppEvent(Number(req.params["id"]));
+    logAction(req, `deleted mob record #${req.params["id"]}`);
+    return {};
+  });
+});
+
+/* --------------------------------- gates --------------------------------- */
+
+stockApi.get("/gates", (_req, res) => {
+  res.json(listGates());
+});
+
+stockApi.get("/gates/:id", (req, res) => {
+  const id = Number(req.params["id"]);
+  const g = getFeature(id);
+  if (!g || !isGate(g)) { res.status(404).json({ error: "No such gate" }); return; }
+  const info = gateInfo(g, listFeaturesOfKind("paddock"), gateStateAt(id, "9999-12-31", null));
+  res.json({
+    ...info,
+    paddock_names: info.paddocks.map(nameOf),
+    history: gateHistory(id).map((e) => ({ ...e, paddocks: [nameOf(e.paddock_a), nameOf(e.paddock_b)] })),
+  });
+});
+
+/** What opening or closing would do, without doing it. */
+stockApi.post("/gates/:id/preview", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = setGate(Number(req.params["id"]), b as unknown as GateInput, parseWhen(b["date"], b["time"]), who(req), true);
+    return { ...r, changes: r.changes.map((c) => ({ ...c, from_names: c.from.map(nameOf), to_names: c.to.map(nameOf) })) };
+  });
+});
+
+stockApi.post("/gates/:id", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const when = parseWhen(b["date"], b["time"]);
+    const r = setGate(Number(req.params["id"]), b as unknown as GateInput, when, who(req));
+    const verb = b["state"] === "open" ? "opened" : "closed";
+    logAction(req, `${verb} ${nameOf(Number(req.params["id"]))} between ${r.paddocks.map(nameOf).join(" and ")} (${when.date} ${when.time ?? ""}); ${r.changes.length} mob(s) affected`);
+    return r;
+  });
+});
+
+/** Sets by hand which two paddocks a gate joins; null goes back to working it out. */
+stockApi.put("/gates/:id/paddocks", requireAdmin, (req, res) => {
+  const id = Number(req.params["id"]);
+  const g = getFeature(id);
+  if (!g || !isGate(g) || g.deleted_at !== null) { res.status(404).json({ error: "No such gate" }); return; }
+  const raw = (req.body as { paddocks?: unknown })?.paddocks;
+  const props = JSON.parse(g.props) as Record<string, unknown>;
+  if (raw === null) {
+    delete props["connects"];
+  } else {
+    const ids = Array.isArray(raw) ? [...new Set(raw.map(Number))] : [];
+    if (ids.length !== 2 || !ids.every((p) => getFeature(p)?.kind === "paddock")) {
+      res.status(400).json({ error: "Choose two different paddocks" });
+      return;
+    }
+    props["connects"] = ids;
+  }
+  try {
+    updateFeature(id, { kind: g.kind, name: g.name, subtype: g.subtype, props, geometry: JSON.parse(g.geometry) }, g.rev, who(req));
+    res.json({ ok: true });
+  } catch (e) {
+    log.error("setting gate paddocks failed", e);
+    res.status(500).json({ error: "Something went wrong" });
   }
 });
 
@@ -126,11 +238,14 @@ stockApi.get("/mobs/:id/events", (req, res) => {
   const { byId } = paddockIndex();
   const mobName = new Map((db.prepare("SELECT id, name FROM mobs").all() as Array<{ id: number; name: string }>).map((m) => [m.id, m.name]));
   const rows = db.prepare(
-    `SELECT * FROM mob_events WHERE mob_id = ? ORDER BY date DESC, CASE kind WHEN 'opening' THEN 1 ELSE 0 END, id DESC`
-  ).all(id) as Array<{ date: string; kind: string; head: number | null; head_change: number | null; weight_kg: number | null; paddock_ids: string | null; data: string; source: string }>;
+    `SELECT * FROM mob_events WHERE mob_id = ? ORDER BY ${EVENT_ORDER}`
+  ).all(id) as Array<{ id: number; date: string; time: string | null; batch: string | null; kind: string; head: number | null; head_change: number | null; weight_kg: number | null; paddock_ids: string | null; data: string; source: string }>;
+  rows.reverse(); // newest first
   res.json(rows.map((e) => {
     const data = JSON.parse(e.data) as Record<string, unknown>;
     return {
+      id: e.id, time: e.time, batch: e.batch,
+      reason: data["reason"] ?? null, gate_name: data["gate_name"] ?? null,
       date: e.date, kind: e.kind, head: e.head, head_change: e.head_change, weight_kg: e.weight_kg,
       paddocks: e.paddock_ids ? (JSON.parse(e.paddock_ids) as number[]).map((p) => byId.get(p)?.row.name ?? `#${p}`) : null,
       agriwebb_event: data["agriwebb_event"] ?? null,

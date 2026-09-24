@@ -43,6 +43,8 @@ export interface MobEventRow {
   source: string;
   username: string | null;
   created_at: number;
+  time: string | null;
+  batch: string | null;
 }
 
 export interface MobInput {
@@ -69,6 +71,8 @@ export interface EventInput {
   adg_kg?: number | null;
   paddock_ids?: number[] | null;
   data?: Record<string, unknown>;
+  /** "HH:MM", local. */
+  time?: string | null;
 }
 
 /* ---------------------------------- AE ----------------------------------- */
@@ -89,32 +93,43 @@ export function aeFromWeight(kg: number | null): number | null {
 /* -------------------------------- writing -------------------------------- */
 
 export function createMobWithEvents(
-  m: MobInput, events: EventInput[], source: string, username: string | null
+  m: MobInput, events: EventInput[], source: string, username: string | null, batch: string | null = null
 ): number {
   const now = Date.now();
   const r = db.prepare(`
     INSERT INTO mobs (name, species, breed, age_class, sex, tag_colour, management_tag, origin,
-      birth_date, description, owner, data, source, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      birth_date, description, owner, data, source, created_at, updated_at, batch)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     m.name, m.species, m.breed, m.age_class, m.sex, m.tag_colour, m.management_tag, m.origin,
-    m.birth_date, m.description, m.owner, JSON.stringify(m.data), source, now, now
+    m.birth_date, m.description, m.owner, JSON.stringify(m.data), source, now, now, batch
   );
   const id = Number(r.lastInsertRowid);
-  const ins = db.prepare(`
-    INSERT INTO mob_events (mob_id, date, kind, head, head_change, weight_kg, adg_kg, paddock_ids,
-      data, source, username, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const e of events) {
-    ins.run(
-      id, e.date, e.kind, e.head ?? null, e.head_change ?? null, e.weight_kg ?? null,
-      e.adg_kg ?? null, e.paddock_ids ? JSON.stringify(e.paddock_ids) : null,
-      JSON.stringify(e.data ?? {}), source, username, now
-    );
-  }
+  for (const e of events) addEvent(id, e, source, username, batch);
   return id;
 }
+
+/** Appends one event to a mob. */
+export function addEvent(
+  mobId: number, e: EventInput, source: string, username: string | null, batch: string | null = null
+): number {
+  return Number(db.prepare(`
+    INSERT INTO mob_events (mob_id, date, time, kind, head, head_change, weight_kg, adg_kg, paddock_ids,
+      data, source, username, created_at, batch)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    mobId, e.date, e.time ?? null, e.kind, e.head ?? null, e.head_change ?? null, e.weight_kg ?? null,
+    e.adg_kg ?? null, e.paddock_ids ? JSON.stringify(e.paddock_ids) : null,
+    JSON.stringify(e.data ?? {}), source, username, Date.now(), batch
+  ).lastInsertRowid);
+}
+
+/**
+ * The order events happen in. Within a day, an opening comes first (a mob
+ * cannot be moved before it exists), then by time where one was recorded,
+ * then in the order they were entered.
+ */
+export const EVENT_ORDER = "date, CASE kind WHEN 'opening' THEN 0 ELSE 1 END, IFNULL(time, ''), id";
 
 /* -------------------------------- reading -------------------------------- */
 
@@ -124,13 +139,17 @@ export function listMobs(includeClosed = false): MobRow[] {
   ).all() as MobRow[];
 }
 
-function eventsUpTo(asOf: string): Map<number, MobEventRow[]> {
-  const rows = db.prepare(
-    // Opening first on a shared date, so a move recorded the same day as the
-    // import lands on top of it rather than being overwritten by it.
-    `SELECT * FROM mob_events WHERE date <= ?
-     ORDER BY mob_id, date, CASE kind WHEN 'opening' THEN 0 ELSE 1 END, id`
-  ).all(asOf) as MobEventRow[];
+/**
+ * Every mob's events up to a moment. With a time, events later that same day
+ * are left out — which matters when a gate is opened at 2 pm on a day the mob
+ * was also moved at 9 am.
+ */
+function eventsUpTo(asOf: string, atTime: string | null = null): Map<number, MobEventRow[]> {
+  const rows = (db.prepare(
+    `SELECT * FROM mob_events WHERE date <= ? ORDER BY mob_id, ${EVENT_ORDER}`
+  ).all(asOf) as MobEventRow[]).filter((e) =>
+    atTime === null || e.date < asOf || e.time === null || e.time <= atTime
+  );
   const out = new Map<number, MobEventRow[]>();
   for (const e of rows) {
     const list = out.get(e.mob_id);
@@ -197,8 +216,8 @@ export interface MobView {
   agriwebb_ae_head: number | null;
 }
 
-export function mobViews(asOf = today()): MobView[] {
-  const events = eventsUpTo(asOf);
+export function mobViews(asOf = today(), atTime: string | null = null): MobView[] {
+  const events = eventsUpTo(asOf, atTime);
   // Closed mobs are included so a past date shows what was there then; the
   // head filter below drops anything not on hand on that date.
   const isToday = asOf >= today();
@@ -299,50 +318,6 @@ export function updateMob(id: number, edit: MobEdit): MobRow | null {
   return db.prepare("SELECT * FROM mobs WHERE id = ?").get(id) as MobRow;
 }
 
-/* --------------------------------- moving -------------------------------- */
-
-export class StockError extends Error {}
-
-/**
- * Moves a mob — or opens gates so it can reach more paddocks, which is the
- * same thing: from this date it has access to exactly these paddocks. The
- * first paddock is where its head is counted.
- *
- * A move cannot be dated before the mob's opening record. Folding happens in
- * date order, so an earlier move would simply be overwritten by the opening
- * position and look as though it had been lost.
- */
-export function moveMob(
-  mobId: number, date: string, paddockIds: number[], note: string | null, username: string | null
-): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
-    throw new StockError("Give the date as YYYY-MM-DD");
-  }
-  if (date > today()) throw new StockError("A move cannot be in the future");
-  const ids = [...new Set(paddockIds.map(Number))];
-  if (ids.length === 0 || ids.some((id) => !Number.isInteger(id))) {
-    throw new StockError("Choose at least one paddock");
-  }
-  const found = db.prepare(
-    `SELECT id FROM features WHERE kind = 'paddock' AND deleted_at IS NULL AND id IN (${ids.map(() => "?").join(",")})`
-  ).all(...ids) as Array<{ id: number }>;
-  if (found.length !== ids.length) throw new StockError("One of those paddocks is not on the map");
-
-  const mob = db.prepare("SELECT id FROM mobs WHERE id = ? AND closed_at IS NULL").get(mobId);
-  if (!mob) throw new StockError("No such mob");
-  const opening = db.prepare(
-    "SELECT MIN(date) d FROM mob_events WHERE mob_id = ? AND kind = 'opening'"
-  ).get(mobId) as { d: string | null };
-  if (opening.d && date < opening.d) {
-    throw new StockError(`This mob's records start on ${opening.d}; a move cannot be dated before that`);
-  }
-
-  db.prepare(`
-    INSERT INTO mob_events (mob_id, date, kind, paddock_ids, data, source, username, created_at)
-    VALUES (?, ?, 'move', ?, ?, 'app', ?, ?)
-  `).run(mobId, date, JSON.stringify(ids), JSON.stringify(note ? { note } : {}), username, Date.now());
-}
-
 /* ----------------------------- grazing history --------------------------- */
 
 interface Segment {
@@ -361,7 +336,7 @@ interface Segment {
  */
 function allSegments(): Segment[] {
   const rows = db.prepare(
-    `SELECT * FROM mob_events ORDER BY mob_id, date, CASE kind WHEN 'opening' THEN 0 ELSE 1 END, id`
+    `SELECT * FROM mob_events ORDER BY mob_id, ${EVENT_ORDER}`
   ).all() as MobEventRow[];
   const out: Segment[] = [];
   let i = 0;

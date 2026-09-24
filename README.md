@@ -78,6 +78,21 @@ opening position.
 - AgriWebb exports mobs with no ID and repeated names, so duplicates are given a
   distinguishing name on import. Re-importing the same list is recognised and skipped.
 
+### On the map
+
+- **Mobs** sit in their paddock as icons showing their head count: blue for your own
+  stock, amber for agistment, a dashed outline for a mob with gates open to more than one
+  paddock. Click one to open it. **Drag it onto another paddock to move it.** A pop-up asks
+  whether it's the whole mob or only some. "Only some" drafts them off into a new mob in
+  that paddock, with a head count, name, weight and a note on which ones.
+- **Gates**: click one to see which two paddocks it joins (worked out from where it
+  sits, and correctable) and whether it's open. Opening it, now or at an earlier date and
+  time, gives every mob on either side both paddocks. Closing it asks which side each mob
+  ended up on. Open gates show green.
+- **Undo**: every move, draft and gate change can be undone from the confirmation or
+  from the mob's or gate's history. A draft's undo removes the mob it created.
+  Imported AgriWebb records can't be undone; they're the record of what happened.
+
 ### Movement history
 
 AgriWebb's **Movement records** report (Reports → Movement records, date range set to

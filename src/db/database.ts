@@ -161,6 +161,24 @@ CREATE TABLE IF NOT EXISTS mob_events (
 );
 CREATE INDEX IF NOT EXISTS idx_mob_events_mob ON mob_events(mob_id, date);
 
+-- Gates opening and closing, dated. A gate joins two paddocks; opening it
+-- gives every mob on either side access to both, which is recorded as moves on
+-- those mobs in the same action (same batch), so undoing the one undoes all.
+CREATE TABLE IF NOT EXISTS gate_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  gate_id    INTEGER NOT NULL,
+  paddock_a  INTEGER NOT NULL,
+  paddock_b  INTEGER NOT NULL,
+  state      TEXT    NOT NULL CHECK (state IN ('open','closed')),
+  date       TEXT    NOT NULL,
+  time       TEXT,
+  note       TEXT,
+  batch      TEXT    NOT NULL,
+  username   TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gate_events_gate ON gate_events(gate_id, date);
+
 -- Rain gauges, optionally tied to a point on the map.
 CREATE TABLE IF NOT EXISTS rain_gauges (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +212,31 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 `);
+
+/*
+ * Columns added after the first release. SQLite has no ADD COLUMN IF NOT
+ * EXISTS, so each is checked for first.
+ */
+{
+  const cols = (db.pragma("table_info(mob_events)") as Array<{ name: string }>).map((c) => c.name);
+  if (!cols.includes("time")) {
+    // "HH:MM", local. Orders events within a day; null where only the date is known.
+    db.exec("ALTER TABLE mob_events ADD COLUMN time TEXT");
+    // Imported AgriWebb history kept its observation time in data.at.
+    db.exec(`UPDATE mob_events SET time = substr(json_extract(data, '$.at'), 12, 5)
+             WHERE time IS NULL AND json_extract(data, '$.at') IS NOT NULL`);
+  }
+  if (!cols.includes("batch")) {
+    // Everything recorded by one action shares a batch, which is what undo removes.
+    db.exec("ALTER TABLE mob_events ADD COLUMN batch TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_mob_events_batch ON mob_events(batch)");
+  }
+  const mobCols = (db.pragma("table_info(mobs)") as Array<{ name: string }>).map((c) => c.name);
+  if (!mobCols.includes("batch")) {
+    // Set on a mob created by an action (a draft), so undoing it removes the mob too.
+    db.exec("ALTER TABLE mobs ADD COLUMN batch TEXT");
+  }
+}
 
 /* --------------------------------- events -------------------------------- */
 

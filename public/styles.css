@@ -420,3 +420,49 @@ table.mobs-review tr.dup td{opacity:.6}
 .danger-link{color:var(--crit)}
 .tabs{overflow-x:auto;scrollbar-width:none}
 .tabs button{white-space:nowrap}
+
+/* --------------------------------- mob icons -------------------------------- */
+
+.mobicon-wrap{background:none;border:0}
+.mobicon{
+  display:flex;align-items:center;justify-content:center;gap:4px;
+  height:24px;border-radius:12px;
+  background:#0C1012;color:#E7EEF0;
+  border:2px solid #4FA9D6;
+  font:700 12px/1 var(--sans);font-variant-numeric:tabular-nums;
+  box-shadow:0 1px 4px rgba(0,0,0,.6);
+  cursor:grab;user-select:none;
+}
+.mobicon svg{color:#4FA9D6;flex:0 0 auto}
+/* Agistment cattle: someone else's stock, seen at a glance. */
+.mobicon.agist{border-color:#E0A845}
+.mobicon.agist svg{color:#E0A845}
+/* Gates open to more paddocks than this one. */
+.mobicon.shared{border-style:dashed}
+.leaflet-marker-dragging .mobicon,.mobicon:active{cursor:grabbing;box-shadow:0 4px 14px rgba(0,0,0,.7)}
+
+/* ------------------------------ status & actions ---------------------------- */
+
+.statuscard{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0 4px}
+.statuscard .big{font-size:15px;line-height:1.4}
+.statuscard .btns{margin-top:10px}
+.gatestate{display:inline-block;font-weight:700;font-size:13px;padding:2px 9px;border-radius:999px;background:var(--line);color:var(--ink-2)}
+.gatestate.open{background:var(--good-bg);color:var(--good)}
+.radios{display:flex;flex-wrap:wrap;gap:6px 16px}
+label.radio{display:flex;align-items:center;gap:7px;font-size:14px;text-transform:none;letter-spacing:0;color:var(--ink);font-weight:400;margin:0;padding:3px 0;cursor:pointer}
+.f label.radio{display:flex}
+.dest{font-weight:650;font-size:15px;padding:6px 0}
+dialog .dlg.narrow{max-width:460px}
+dialog:has(.dlg.narrow){width:min(460px, calc(100vw - 24px))}
+.f input[type="date"],.f input[type="time"],.row2 input[type="date"],.row2 input[type="time"]{
+  background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;color-scheme:dark;width:100%;
+}
+.history .grow{flex:1}
+.history li{align-items:flex-start}
+.mobicon.compact{height:18px;font-size:11px;border-width:1.5px;border-radius:9px}
+/* The icon itself is what gets grabbed, never the drawing inside it: Leaflet's
+   drag handling trips over SVG child elements as drag targets. */
+.mobicon svg,.mobicon span{pointer-events:none}
+/* Radios and checkboxes are not text boxes: the .f input rule above stretches them. */
+.f input[type="radio"],.f input[type="checkbox"]{width:auto;flex:0 0 auto;margin:0}
+label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
