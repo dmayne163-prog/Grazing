@@ -104,9 +104,13 @@ function clean(input: FeatureInput): Clean {
   }
 
   const name = typeof input.name === "string" ? input.name.trim().slice(0, 120) : "";
-  const subtype = typeof input.subtype === "string" && input.subtype.trim() !== ""
+  const typed = typeof input.subtype === "string" && input.subtype.trim() !== ""
     ? input.subtype.trim().slice(0, 60)
     : null;
+  // One of the suggested types typed with different capitals is that type:
+  // "Gate" is a gate. Free text that matches none is kept as typed.
+  const subtype = typed === null ? null
+    : def.subtypes.find((st) => st.toLowerCase() === typed.toLowerCase()) ?? typed;
 
   const props = input.props && typeof input.props === "object" && !Array.isArray(input.props)
     ? input.props
@@ -116,6 +120,21 @@ function clean(input: FeatureInput): Clean {
 
   return { kind: def.id, name, subtype, props: propsJson, geometry, ...measure(geometry) };
 }
+
+/**
+ * Brings existing records into line with the rule above — a gate saved as
+ * "Gate" before it existed was invisible to everything that looks for gates.
+ * Runs once at start-up; a no-op when nothing needs it.
+ */
+function normaliseSubtypes() {
+  const fix = db.prepare(
+    "UPDATE features SET subtype = ? WHERE kind = ? AND subtype != ? AND lower(subtype) = lower(?)"
+  );
+  for (const k of KIND_BY_ID.values()) {
+    for (const st of k.subtypes) fix.run(st, k.id, st, st);
+  }
+}
+normaliseSubtypes();
 
 /* -------------------------------- writing -------------------------------- */
 

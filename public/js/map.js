@@ -98,9 +98,10 @@ const OPEN = "#5FBE8E";
 
 function pointStyle(f, selected) {
   const { kind, subtype } = f.properties;
-  const openGate = subtype === "gate" && gateStates.get(f.id) === "open";
+  const gate = (subtype || "").toLowerCase() === "gate";
+  const openGate = gate && gateStates.get(f.id) === "open";
   const colour = openGate ? OPEN : kindColour(kind, subtype);
-  const radius = openGate ? 5.5 : kind === "infrastructure" && subtype === "gate" ? 3.5
+  const radius = openGate ? 5.5 : kind === "infrastructure" && gate ? 3.5
     : subtype === "tank" || subtype === "bore" || subtype === "dam" ? 6
     : 5;
   return {
@@ -282,7 +283,7 @@ export class FarmMap {
   setGateStates(list) {
     gateStates = new Map(list.map((g) => [g.gate_id, g.state]));
     for (const layer of this.layersById.values()) {
-      if (layer.feature.properties.subtype === "gate") restyle(layer, layer.feature.id === this.selectedId);
+      if ((layer.feature.properties.subtype || "").toLowerCase() === "gate") restyle(layer, layer.feature.id === this.selectedId);
     }
   }
 

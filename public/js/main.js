@@ -54,6 +54,7 @@ const km = (m) => (m == null ? "—" : m >= 1000 ? `${nf1.format(m / 1000)} km` 
 const when = (ts) => new Date(ts).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
 
 const kindDef = (id) => state.meta.kinds.find((k) => k.id === id);
+const isGate = (f) => (f.properties.subtype || "").toLowerCase() === "gate";
 const kindLabel = (id) => kindDef(id)?.label || id;
 const canEdit = () => state.meta.canEdit;
 
@@ -746,7 +747,7 @@ function featureHtml(f) {
     <button class="linkbtn back" id="back">← All paddocks</button>
     <h2>${escapeHtml(p.name || "(unnamed)")}</h2>
     <p class="sub"><span class="swatch" data-colour="${kindColour(p.kind, p.subtype)}"></span>${escapeHtml(kindLabel(p.kind))}${p.subtype ? ` · ${escapeHtml(p.subtype)}` : ""}</p>
-    ${p.subtype === "gate" ? gatePanelHtml() : ""}
+    ${isGate(f) ? gatePanelHtml() : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${p.kind === "paddock" ? stockHtml(f) : ""}
     ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
@@ -772,7 +773,7 @@ function bindFeature(f) {
   });
   $("#back").onclick = () => select(null);
   if (f.properties.kind === "paddock") loadGrazing(f);
-  if (f.properties.subtype === "gate") loadGatePanel(ctx, f, body);
+  if (isGate(f)) loadGatePanel(ctx, f, body);
   loadHistory(f.id);
   if (!canEdit()) return;
 
