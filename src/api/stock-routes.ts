@@ -12,7 +12,7 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
-  deleteAppEvent, draftMob, moveMobs, parseWhen, setGate, StockError, undoBatch, weighMob,
+  deleteAppEvent, draftMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
   type DraftInput, type GateInput, type WeighInput,
 } from "../stock/actions.js";
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
@@ -163,6 +163,33 @@ stockApi.post("/mobs/:id/weigh", requireAdmin, (req, res) => {
   });
 });
 
+stockApi.post("/mobs/:id/deaths", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = recordDeaths(Number(req.params["id"]), b["head"], parseWhen(b["date"], b["time"]), b["note"], who(req));
+    logAction(req, `recorded ${String(b["head"])} death(s) in mob #${req.params["id"]}`);
+    return r;
+  });
+});
+
+stockApi.post("/mobs/:id/recount", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = recount(Number(req.params["id"]), b["head"], parseWhen(b["date"], b["time"]), b["note"], who(req));
+    logAction(req, `recounted mob #${req.params["id"]} at ${String(b["head"])} hd`);
+    return r;
+  });
+});
+
+stockApi.post("/mob-events/:id/void", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const r = voidEvent(Number(req.params["id"]), b["reason"], who(req));
+    logAction(req, `marked mob record #${req.params["id"]} as a mistake`);
+    return r;
+  });
+});
+
 stockApi.post("/undo/:batch", requireAdmin, (req, res) => {
   act(res, () => {
     const r = undoBatch(String(req.params["batch"]));
@@ -252,10 +279,16 @@ stockApi.get("/mobs/:id/events", (req, res) => {
     `SELECT * FROM mob_events WHERE mob_id = ? ORDER BY ${EVENT_ORDER}`
   ).all(id) as Array<{ id: number; date: string; time: string | null; batch: string | null; kind: string; head: number | null; head_change: number | null; weight_kg: number | null; adg_kg: number | null; paddock_ids: string | null; data: string; source: string }>;
   rows.reverse(); // newest first
-  res.json(rows.map((e) => {
+  const voids = new Map<number, { batch: string | null; reason: string | null }>();
+  for (const r of rows) {
+    if (r.kind !== "void") continue;
+    const d = JSON.parse(r.data) as { voids?: number; reason?: string };
+    if (typeof d.voids === "number") voids.set(d.voids, { batch: r.batch, reason: d.reason ?? null });
+  }
+  res.json(rows.filter((e) => e.kind !== "void").map((e) => {
     const data = JSON.parse(e.data) as Record<string, unknown>;
     return {
-      id: e.id, time: e.time, batch: e.batch,
+      id: e.id, time: e.time, batch: e.batch, voided: voids.get(e.id) ?? null,
       reason: data["reason"] ?? null, gate_name: data["gate_name"] ?? null,
       method: data["method"] ?? null, head_weighed: data["head_weighed"] ?? null, adg_kg: e.adg_kg ?? null,
       date: e.date, kind: e.kind, head: e.head, head_change: e.head_change, weight_kg: e.weight_kg,

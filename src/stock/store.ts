@@ -64,7 +64,7 @@ export interface MobInput {
 
 export interface EventInput {
   date: string;
-  kind: "opening" | "move" | "weigh" | "count" | "purchase" | "sale" | "death" | "transfer";
+  kind: "opening" | "move" | "weigh" | "count" | "purchase" | "sale" | "death" | "transfer" | "void";
   head?: number | null;
   head_change?: number | null;
   weight_kg?: number | null;
@@ -140,15 +140,29 @@ export function listMobs(includeClosed = false): MobRow[] {
 }
 
 /**
+ * Records struck out as mistakes. A "void" event names the record it cancels;
+ * the record itself is kept, so the history still shows what was entered and
+ * why it no longer counts — and undoing the void brings it back.
+ */
+export function voidedIds(): Set<number> {
+  const rows = db.prepare(
+    "SELECT json_extract(data, '$.voids') v FROM mob_events WHERE kind = 'void'"
+  ).all() as Array<{ v: number | null }>;
+  return new Set(rows.map((r) => r.v).filter((v): v is number => typeof v === "number"));
+}
+
+/**
  * Every mob's events up to a moment. With a time, events later that same day
  * are left out — which matters when a gate is opened at 2 pm on a day the mob
  * was also moved at 9 am.
  */
 function eventsUpTo(asOf: string, atTime: string | null = null): Map<number, MobEventRow[]> {
+  const voided = voidedIds();
   const rows = (db.prepare(
     `SELECT * FROM mob_events WHERE date <= ? ORDER BY mob_id, ${EVENT_ORDER}`
   ).all(asOf) as MobEventRow[]).filter((e) =>
-    atTime === null || e.date < asOf || e.time === null || e.time <= atTime
+    e.kind !== "void" && !voided.has(e.id) &&
+    (atTime === null || e.date < asOf || e.time === null || e.time <= atTime)
   );
   const out = new Map<number, MobEventRow[]>();
   for (const e of rows) {
@@ -180,8 +194,14 @@ function fold(events: MobEventRow[], asOf: string): MobState {
     head: 0, paddock_ids: [], weight_kg: null, est_weight_kg: null,
     last_weighed: null, adg_kg: null, in_paddock_since: null,
   };
+  let started = false;
   for (const e of events) {
-    if (e.head !== null && (e.kind === "opening" || e.kind === "count")) s.head = e.head;
+    // A later "opening" is a snapshot (AgriWebb's mob list) laid over a mob
+    // that already has history: it places the mob, but its head count is
+    // the history's, not the snapshot's — otherwise a record struck out as a
+    // mistake would still be counted through the snapshot taken after it.
+    if (e.head !== null && (e.kind === "count" || (e.kind === "opening" && !started))) s.head = e.head;
+    if (e.kind === "opening") started = true;
     if (e.head_change !== null) s.head += e.head_change;
     if (e.paddock_ids !== null && (e.kind === "opening" || e.kind === "move")) {
       const next = JSON.parse(e.paddock_ids) as number[];
@@ -335,21 +355,24 @@ export interface Segment {
  * together, so a mob drafted and moved in a morning is one change, not three.
  */
 export function allSegments(): Segment[] {
-  const rows = db.prepare(
+  const voided = voidedIds();
+  const rows = (db.prepare(
     `SELECT * FROM mob_events ORDER BY mob_id, ${EVENT_ORDER}`
-  ).all() as MobEventRow[];
+  ).all() as MobEventRow[]).filter((e) => e.kind !== "void" && !voided.has(e.id));
   const out: Segment[] = [];
   let i = 0;
   while (i < rows.length) {
     const mobId = rows[i]!.mob_id;
     let head = 0;
+    let started = false;
     let paddocks: number[] = [];
     let open: Segment | null = null;
     while (i < rows.length && rows[i]!.mob_id === mobId) {
       const date = rows[i]!.date;
       while (i < rows.length && rows[i]!.mob_id === mobId && rows[i]!.date === date) {
         const e = rows[i]!;
-        if (e.head !== null && (e.kind === "opening" || e.kind === "count")) head = e.head;
+        if (e.head !== null && (e.kind === "count" || (e.kind === "opening" && !started))) head = e.head;
+        if (e.kind === "opening") started = true;
         if (e.head_change !== null) head += e.head_change;
         if (e.paddock_ids !== null && (e.kind === "opening" || e.kind === "move")) {
           paddocks = JSON.parse(e.paddock_ids) as number[];

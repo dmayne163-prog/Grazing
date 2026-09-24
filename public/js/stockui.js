@@ -286,6 +286,43 @@ export function openWeighDialog(ctx, m) {
   $("#wKg", dialog).focus();
 }
 
+/* ------------------------------ head dialogs ------------------------------- */
+
+/** Deaths or a recount: a number, a when, a note. */
+function headDialog(ctx, m, { title, field, value, go, path, hint, done }) {
+  const d = ctx.dialog;
+  d.innerHTML = `
+    <div class="dlg narrow">
+      <header><h2>${escapeHtml(title)}</h2><div class="muted small">${escapeHtml(m.name)} · ${m.head} hd now</div></header>
+      <div class="body">
+        <div class="f"><label for="hN">${escapeHtml(field)}</label><input id="hN" type="number" min="0" inputmode="numeric" value="${escapeHtml(value)}"></div>
+        ${hint ? `<p class="muted small">${escapeHtml(hint)}</p>` : ""}
+        ${whenHtml("h")}
+        <div class="f"><label for="hNote">Note</label><input id="hNote" placeholder="optional" autocomplete="off"></div>
+      </div>
+      <footer><button class="btn" id="hCancel">Cancel</button><button class="btn primary" id="hGo">${escapeHtml(go)}</button></footer>
+    </div>`;
+  bindWhen(d, "h");
+  $("#hCancel", d).onclick = () => d.close();
+  $("#hGo", d).onclick = async () => {
+    const btn = $("#hGo", d);
+    try {
+      const n = $("#hN", d).value;
+      if (n === "") throw new Error(`Enter ${field.toLowerCase()}`);
+      btn.disabled = true;
+      const r = await send("POST", `/api/mobs/${m.id}/${path}`, { head: Number(n), note: $("#hNote", d).value, ...readWhen(d, "h") });
+      d.close();
+      await ctx.refresh();
+      undoable(ctx, done(n), r.batch);
+    } catch (e) {
+      btn.disabled = false;
+      showError(d, e.message);
+    }
+  };
+  d.showModal();
+  $("#hN", d).select();
+}
+
 /* --------------------------------- mob page -------------------------------- */
 
 export function mobPageHtml(ctx, m) {
@@ -315,6 +352,8 @@ export function mobPageHtml(ctx, m) {
         <button class="btn primary" id="mMove">Move…</button>
         <button class="btn" id="mDraft">Draft some off…</button>
         <button class="btn" id="mWeigh">Record weight…</button>
+        <button class="btn" id="mDeaths">Deaths…</button>
+        <button class="btn" id="mRecount">Recount…</button>
       </div>
       <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
     </div>
@@ -361,6 +400,15 @@ export function bindMobPage(ctx, m, root) {
   };
   const wg = $("#mWeigh", root);
   if (wg) wg.onclick = () => openWeighDialog(ctx, m);
+  $("#mDeaths", root)?.addEventListener("click", () => headDialog(ctx, m, {
+    title: "Record deaths", field: "How many died", value: "1", go: "Record", path: "deaths",
+    done: (n) => `${n} death${Number(n) === 1 ? "" : "s"} recorded in ${m.name}`,
+  }));
+  $("#mRecount", root)?.addEventListener("click", () => headDialog(ctx, m, {
+    title: "Recount", field: "Head counted", value: String(m.head), go: "Save count", path: "recount",
+    hint: "The mob's head from this moment on. For a death or sale, record that instead, so the history says why the number changed.",
+    done: (n) => `${m.name} counted at ${n} hd`,
+  }));
   const save = $("#mSave", root);
   if (save) save.onclick = async () => {
     try {
@@ -381,7 +429,7 @@ const EVENT_TEXT = {
   opening: (e) => e.agriwebb_event === "Created from draft/split" ? `Drafted off${e.from_mob ? ` from ${e.from_mob}` : ""} · ${e.head} hd`
     : e.agriwebb_event === "Purchased" ? `Purchased · ${e.head} hd`
     : e.from_mob ? `Drafted off from ${e.from_mob} · ${e.head} hd`
-    : e.source.startsWith("import:") ? `AgriWebb mob list: ${e.head} hd`
+    : e.source.startsWith("import:") ? `AgriWebb mob list (said ${e.head} hd)`
     : `Started · ${e.head} hd`,
   move: (e) => e.reason === "gate opened" ? `${e.gate_name || "Gate"} opened`
     : e.reason === "gate closed" ? `${e.gate_name || "Gate"} closed` : "Moved",
@@ -412,11 +460,41 @@ async function loadMobEvents(ctx, id, root) {
       // One undo per action, on its first line: a draft is two records.
       const undo = ctx.canEdit && e.source === "app" && !(e.batch && shown.has(e.batch));
       if (e.batch) shown.add(e.batch);
+      // Imported records (AgriWebb) can't be undone, but a wrong one can be
+      // marked as a mistake — and that marking undone in turn.
+      const canVoid = ctx.canEdit && e.source !== "app" && e.kind !== "opening" && !e.voided;
       return `
-      <li><span class="when">${day(e.date)}${e.time ? `<br><span class="muted tiny">${escapeHtml(e.time)}</span>` : ""}</span>
-      <span class="grow">${escapeHtml((EVENT_TEXT[e.kind] || (() => e.kind))(e))}${e.paddocks ? ` → ${escapeHtml(e.paddocks.join(" + "))}` : ""}${e.note ? `<br><span class="muted tiny">${escapeHtml(e.note)}</span>` : ""}</span>
-      ${undo ? `<button class="linkbtn danger-link" data-undo="${e.batch || ""}" data-event="${e.id}">Undo</button>` : ""}</li>`;
+      <li class="${e.voided ? "voided" : ""}"><span class="when">${day(e.date)}${e.time ? `<br><span class="muted tiny">${escapeHtml(e.time)}</span>` : ""}</span>
+      <span class="grow"><span class="what">${escapeHtml((EVENT_TEXT[e.kind] || (() => e.kind))(e))}${e.paddocks ? ` → ${escapeHtml(e.paddocks.join(" + "))}` : ""}</span>${e.note ? `<br><span class="muted tiny">${escapeHtml(e.note)}</span>` : ""}
+        ${e.voided ? `<br><span class="tiny bad">Marked as a mistake${e.voided.reason ? `: ${escapeHtml(e.voided.reason)}` : ""}</span>` : ""}</span>
+      ${undo ? `<button class="linkbtn danger-link" data-undo="${e.batch || ""}" data-event="${e.id}">Undo</button>` : ""}
+      ${e.voided && ctx.canEdit ? `<button class="linkbtn" data-restore="${e.voided.batch}">Restore</button>` : ""}
+      ${canVoid ? `<button class="linkbtn muted-link" data-void="${e.id}">Mistake?</button>` : ""}</li>`;
     }).join("") || '<li class="muted">Nothing recorded.</li>';
+    el.querySelectorAll("[data-void]").forEach((b) => {
+      b.onclick = async () => {
+        const reason = prompt("Mark this record as a mistake? It stays in the history, struck out, and stops counting.\n\nWhy (optional):", "");
+        if (reason === null) return;
+        try {
+          const r = await send("POST", `/api/mob-events/${b.dataset.void}/void`, { reason });
+          await ctx.refresh();
+          undoable(ctx, "Marked as a mistake", r.batch);
+        } catch (e) {
+          ctx.toast(e.message, { error: true });
+        }
+      };
+    });
+    el.querySelectorAll("[data-restore]").forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await send("POST", `/api/undo/${b.dataset.restore}`);
+          await ctx.refresh();
+          ctx.toast("Restored");
+        } catch (e) {
+          ctx.toast(e.message, { error: true });
+        }
+      };
+    });
     el.querySelectorAll("[data-undo]").forEach((b) => {
       b.onclick = async () => {
         if (!confirm("Undo this? Anything it recorded — including a mob it drafted off — is removed.")) return;

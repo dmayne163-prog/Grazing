@@ -321,3 +321,53 @@ export function weighMob(mobId: number, input: WeighInput, when: When, username:
   }, "app", username, batch);
   return { batch };
 }
+
+/* ------------------------------ head changes ----------------------------- */
+
+/** Deaths in a mob: head down by that many from the moment given. */
+export function recordDeaths(mobId: number, nRaw: unknown, when: When, noteRaw: unknown, username: string | null): { batch: string } {
+  const v = mobAt(mobId, when);
+  const n = Number(nRaw);
+  if (!Number.isInteger(n) || n < 1) throw new StockError("Enter how many died");
+  if (n > v.state.head) throw new StockError(`The mob only had ${v.state.head} hd then`);
+  const note = clean(noteRaw, 500);
+  const batch = randomUUID();
+  addEvent(mobId, { date: when.date, time: when.time, kind: "death", head_change: -n, data: note ? { note } : {} }, "app", username, batch);
+  return { batch };
+}
+
+/** A count that says what the head actually is, from that moment on. */
+export function recount(mobId: number, headRaw: unknown, when: When, noteRaw: unknown, username: string | null): { batch: string } {
+  mobAt(mobId, when);
+  const head = Number(headRaw);
+  if (!Number.isInteger(head) || head < 0 || head > 100_000) throw new StockError("Enter the head counted");
+  const note = clean(noteRaw, 500);
+  const batch = randomUUID();
+  addEvent(mobId, { date: when.date, time: when.time, kind: "count", head, data: note ? { note } : {} }, "app", username, batch);
+  return { batch };
+}
+
+/**
+ * Strikes out an imported record as a mistake — the AgriWebb death that never
+ * happened. The record stays in the history, marked, and stops counting.
+ * Records made in this app are undone instead; openings can't be struck out,
+ * since without one the mob has no starting point.
+ */
+export function voidEvent(eventId: number, reasonRaw: unknown, username: string | null): { batch: string } {
+  const e = db.prepare("SELECT id, mob_id, kind, source FROM mob_events WHERE id = ?").get(eventId) as
+    { id: number; mob_id: number; kind: string; source: string } | undefined;
+  if (!e) throw new StockError("No such record");
+  if (e.kind === "opening" || e.kind === "void") throw new StockError("That record can't be marked as a mistake");
+  if (e.source === "app") throw new StockError("Records made in this app are undone rather than marked as mistakes");
+  const already = db.prepare("SELECT 1 FROM mob_events WHERE kind = 'void' AND json_extract(data, '$.voids') = ?").get(eventId);
+  if (already) throw new StockError("That record is already marked as a mistake");
+  const reason = clean(reasonRaw, 300);
+  const batch = randomUUID();
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  addEvent(e.mob_id, {
+    date: today(), time: `${p(d.getHours())}:${p(d.getMinutes())}`, kind: "void",
+    data: { voids: eventId, ...(reason ? { reason } : {}) },
+  }, "app", username, batch);
+  return { batch };
+}

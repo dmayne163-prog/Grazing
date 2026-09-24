@@ -478,3 +478,8 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .choice input[type="radio"]{margin-top:3px;flex:0 0 auto}
 .choice select{margin-left:6px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 6px;max-width:100%}
 .statuscard .big .linkbtn{text-align:left;display:inline;font-size:inherit;font-weight:650}
+
+/* A record marked as a mistake: kept, struck out. */
+.history li.voided .what{text-decoration:line-through;color:var(--ink-3)}
+.muted-link{color:var(--ink-3)}
+.muted-link:hover{color:var(--accent)}
