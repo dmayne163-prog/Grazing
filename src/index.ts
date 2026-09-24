@@ -7,6 +7,7 @@ import { auth } from "./api/auth-routes.js";
 import { mapApi } from "./api/map-routes.js";
 import { stockApi } from "./api/stock-routes.js";
 import { rainApi } from "./api/rain-routes.js";
+import { animalApi } from "./api/animal-routes.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -59,6 +60,7 @@ app.get("/api/health", (_req, res) => { res.json({ ok: true }); });
 app.use("/api/auth", auth);
 app.use("/api", stockApi);
 app.use("/api", rainApi);
+app.use("/api", animalApi);
 app.use("/api", mapApi);
 
 app.use("/tiles", requireAuth, tiles);

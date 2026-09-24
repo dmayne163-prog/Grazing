@@ -466,3 +466,15 @@ dialog:has(.dlg.narrow){width:min(460px, calc(100vw - 24px))}
 /* Radios and checkboxes are not text boxes: the .f input rule above stretches them. */
 .f input[type="radio"],.f input[type="checkbox"]{width:auto;flex:0 0 auto;margin:0}
 label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
+
+/* A list of options to pick one from, each with its reasons underneath. */
+.choices{display:grid;gap:6px}
+.choice{
+  display:flex;gap:10px;align-items:flex-start;
+  padding:8px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;
+  font-size:14px;line-height:1.4;
+}
+.choice:has(input:checked){border-color:var(--accent);background:rgba(79,169,214,.08)}
+.choice input[type="radio"]{margin-top:3px;flex:0 0 auto}
+.choice select{margin-left:6px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 6px;max-width:100%}
+.statuscard .big .linkbtn{text-align:left;display:inline;font-size:inherit;font-weight:650}

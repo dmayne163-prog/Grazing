@@ -17,6 +17,8 @@ import {
 } from "../stock/actions.js";
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
 import { getFeature } from "../map/store.js";
+import { parseSession, type ParsedSession } from "../animals/session.js";
+import { commitSession, planSession } from "../animals/store.js";
 import {
   commitHistory, historyAlreadyImported, planHistory, replayMovements,
 } from "../stock/agriwebb-history.js";
@@ -314,6 +316,16 @@ stockApi.post(
       return;
     }
     try {
+      // A CSV is a weighing session from the scales (Gallagher TSi, TWR-5, APS).
+      if (/.csv$/i.test(filename)) {
+        const session = parseSession(filename, req.body.toString("utf8"));
+        const plan = planSession(session);
+        const id = storePreview(req, filename, "gallagher-session", { session, filename });
+        const allMobs = mobViews().map((v) => ({ id: v.mob.id, name: v.mob.name, head: v.state.head }))
+          .sort((x, y) => x.name.localeCompare(y.name));
+        res.json({ importId: id, type: "session", name: session.name, date: session.date, count: session.rows.length, allMobs, ...plan });
+        return;
+      }
       const parsed = await parseAgriWebbSheet(req.body);
       const asOf = asOfFromFilename(filename, today());
       const { byId, byName } = paddockIndex();
@@ -440,7 +452,7 @@ function storePreview(req: Request, filename: string, format: string, payload: u
 stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const row = db.prepare("SELECT * FROM imports WHERE id = ?").get(id) as ImportRow | undefined;
-  if (!row || row.status !== "preview" || !row.format.startsWith("agriwebb-")) {
+  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || row.format === "gallagher-session")) {
     res.status(404).json({ error: "That import has expired or was already used. Upload the file again." });
     return;
   }
@@ -452,7 +464,9 @@ stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
         ? commitMovements(row, who(req))
         : row.format === "agriwebb-rainfall"
           ? commitRainfall(row, req.body, who(req))
-          : commitPaddocks(row, who(req));
+          : row.format === "gallagher-session"
+            ? commitSessionImport(row, req.body, who(req))
+            : commitPaddocks(row, who(req));
     db.prepare("UPDATE imports SET status = 'committed', committed_at = ? WHERE id = ?").run(Date.now(), id);
     addEvent({
       ts: Date.now(), source: "stock", kind: "import", severity: "info",
@@ -547,6 +561,28 @@ function commitRainfall(row: ImportRow, body: unknown, username: string | null) 
       summary: `${added} rain reading${added === 1 ? "" : "s"}${skipped ? ` (${skipped} already recorded, skipped)` : ""}`,
     };
   })();
+}
+
+function commitSessionImport(row: ImportRow, body: unknown, username: string | null) {
+  const { session, filename } = JSON.parse(row.payload) as { session: ParsedSession; filename: string };
+  const b = (body ?? {}) as Record<string, unknown>;
+  const mob = b["mob_id"] === null || b["mob_id"] === undefined || b["mob_id"] === "" ? null : Number(b["mob_id"]);
+  try {
+    const r = commitSession(session, {
+      mob_id: mob,
+      date: typeof b["date"] === "string" && b["date"] ? b["date"] : null,
+      name: typeof b["name"] === "string" && b["name"].trim() ? b["name"].trim() : null,
+      update_mob_weight: b["update_mob_weight"] === true,
+      source: "gallagher", filename,
+    }, username);
+    return {
+      created: r.weighed, batch: r.batch,
+      summary: `session: ${session.rows.length} animals (${r.created} new), ${r.weighed} weights`,
+    };
+  } catch (e) {
+    if (e instanceof StockError) throw new ImportError(e.message);
+    throw e;
+  }
 }
 
 function commitMovements(row: ImportRow, username: string | null) {

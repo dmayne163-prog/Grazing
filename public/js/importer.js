@@ -34,18 +34,19 @@ export function openImport(dialog, meta, onDone) {
   function showPicker(error) {
     dialog.innerHTML = `
       <div class="dlg">
-        <header><h2>Import a map</h2></header>
+        <header><h2>Import</h2></header>
         <div class="body">
           ${error ? `<div class="note err">${escapeHtml(error)}</div>` : ""}
           <label class="drop" id="drop">
-            <input type="file" id="file" accept=".json,.geojson,.kml,.kmz,.zip,.xlsx" hidden>
+            <input type="file" id="file" accept=".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv" hidden>
             <p><b>Choose a file</b> or drop it here</p>
             <p class="muted">Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz),<br>
             a zipped shapefile (.zip) or GeoJSON.<br>
-            Records: AgriWebb mob list or paddock list (.xlsx).</p>
+            Records: AgriWebb exports (.xlsx).<br>
+            Animals: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).</p>
           </label>
           <p class="muted small gap-top">
-            Nothing is added to the map until you have reviewed the list on the next screen.
+            Nothing is added until you have reviewed it on the next screen.
           </p>
         </div>
         <footer><button class="btn" id="close">Cancel</button></footer>
@@ -67,11 +68,12 @@ export function openImport(dialog, meta, onDone) {
   async function go(file) {
     dialog.querySelector(".body").innerHTML = `<p>Reading <b>${escapeHtml(file.name)}</b>…</p>`;
     try {
-      if (/\.xlsx$/i.test(file.name)) {
+      if (/\.(xlsx|csv)$/i.test(file.name)) {
         const preview = await upload("/api/import/records/preview", file);
         if (preview.type === "mobs") showMobReview(file.name, preview);
         else if (preview.type === "movements") showMovementReview(file.name, preview);
         else if (preview.type === "rainfall") showRainReview(file.name, preview);
+        else if (preview.type === "session") showSessionReview(file.name, preview);
         else showPaddockCheck(file.name, preview);
         return;
       }
@@ -328,6 +330,106 @@ export function openImport(dialog, meta, onDone) {
       }
     };
     summary();
+  }
+
+  /* ---------------------- step 2: session from the scales ------------------- */
+
+  function showSessionReview(filename, p) {
+    const fmt = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—");
+    const eid = (e) => (e && e.length === 15 ? `${e.slice(0, 3)} ${e.slice(3)}` : e || "");
+    // Only pre-select a mob when one clearly leads; two close candidates are
+    // for you to choose between, not for the app to guess.
+    const [first, second] = p.suggestions;
+    const clear = first && (!second || first.score - second.score >= 15);
+    const others = (p.allMobs || []).filter((m) => !p.suggestions.some((sg) => sg.mob_id === m.id));
+
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review session</h2>
+          <div class="muted small">${escapeHtml(filename)} · ${p.count} animals${p.mean_kg ? ` · average ${Math.round(p.mean_kg)} kg` : ""}</div>
+        </header>
+        <div class="body">
+          <div class="row2">
+            <div class="f"><label for="sName">Session</label><input id="sName" value="${escapeHtml(p.name)}" autocomplete="off"></div>
+            <div class="f"><label for="sDate">Date</label><input id="sDate" type="date" value="${p.date || ""}"></div>
+          </div>
+          <p class="small">${p.new_animals ? `<b>${p.new_animals}</b> new animal${p.new_animals === 1 ? "" : "s"} will be created` : "No new animals"}${p.existing ? `; <b>${p.existing}</b> already have records and get this weighing added` : ""}.</p>
+
+          <h3>Which mob are they in?</h3>
+          ${p.suggestions.length && !clear ? '<div class="note warn">More than one mob fits. Check the reasons and choose.</div>' : ""}
+          <div class="choices">
+            ${p.suggestions.map((sg, i) => `
+              <label class="choice">
+                <input type="radio" name="sMob" value="${sg.mob_id}" ${clear && i === 0 ? "checked" : ""}>
+                <span><b>${escapeHtml(sg.name)}</b> <span class="muted">${sg.head} hd${sg.weight_kg ? ` · ${Math.round(sg.weight_kg)} kg` : ""}</span>
+                <br><span class="muted tiny">${sg.reasons.map(escapeHtml).join(" · ")}</span></span>
+              </label>`).join("")}
+            ${others.length ? `<label class="choice"><input type="radio" name="sMob" value="other"><span>Another mob
+              <select id="sOther"><option value="">choose…</option>${others.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} (${m.head} hd)</option>`).join("")}</select></span></label>` : ""}
+            <label class="choice"><input type="radio" name="sMob" value=""><span>Don't put them in a mob yet</span></label>
+          </div>
+          <label class="radio gap-top"><input type="checkbox" id="sWeight" checked> Set the mob's average weight from this session</label>
+          <p class="muted tiny" id="sWeightNote"></p>
+
+          <details class="gap-top"><summary class="small">The ${p.count} animals</summary>
+            <table class="list"><thead><tr><th>Tag</th><th>EID</th><th class="num">Weight</th><th></th></tr></thead><tbody>
+              ${p.rows.map((r) => `<tr><td>${escapeHtml(r.tag || "")}</td><td class="muted small">${escapeHtml(eid(r.eid))}</td>
+                <td class="num">${r.weight_kg != null ? `${r.weight_kg} kg` : ""}</td>
+                <td class="muted small">${r.animal_id ? `known${r.current_mob ? ` · ${escapeHtml(r.current_mob)}` : ""}` : "new"}${r.notes ? ` · ${escapeHtml(r.notes)}` : ""}</td></tr>`).join("")}
+            </tbody></table>
+          </details>
+        </div>
+        <footer>
+          <span class="grow" id="summary"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import session</button>
+        </footer>
+      </div>`;
+
+    const chosen = () => {
+      const r = dialog.querySelector('input[name="sMob"]:checked');
+      if (!r) return undefined;
+      if (r.value === "other") return dialog.querySelector("#sOther").value ? Number(dialog.querySelector("#sOther").value) : undefined;
+      return r.value === "" ? null : Number(r.value);
+    };
+    const update = () => {
+      const mob = chosen();
+      dialog.querySelector("#commit").disabled = mob === undefined;
+      dialog.querySelector("#summary").textContent = mob === undefined ? "Choose a mob, or none" : "";
+      const w = dialog.querySelector("#sWeight");
+      w.disabled = !mob;
+      const later = mob ? p.later_weighing[mob] : null;
+      dialog.querySelector("#sWeightNote").textContent = later
+        ? `This mob has a later weighing (${Math.round(later.weight_kg)} kg on ${fmt(later.date)}), which stays its current weight.`
+        : "";
+    };
+    dialog.querySelectorAll('input[name="sMob"]').forEach((r) => r.addEventListener("change", update));
+    dialog.querySelector("#sOther")?.addEventListener("change", () => {
+      dialog.querySelector('input[name="sMob"][value="other"]').checked = true;
+      update();
+    });
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      btn.textContent = "Importing…";
+      try {
+        const mob = chosen();
+        const res = await send("POST", `/api/import/records/${p.importId}/commit`, {
+          mob_id: mob, name: dialog.querySelector("#sName").value, date: dialog.querySelector("#sDate").value || null,
+          update_mob_weight: !!mob && dialog.querySelector("#sWeight").checked,
+        });
+        dialog.close();
+        onDone(`Imported ${res.summary}`, res.batch);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = "Import session";
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+        dialog.querySelector(".body").scrollTop = 0;
+      }
+    };
+    update();
   }
 
   /* --------------------------- step 2: rainfall ---------------------------- */

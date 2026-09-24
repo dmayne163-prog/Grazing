@@ -28,7 +28,7 @@ const paddockName = (ctx, id) => ctx.state.byId.get(id)?.properties.name ?? `#${
 /* ------------------------------ "when" fields ------------------------------ */
 
 /** Now, or an earlier date and time from the calendar. */
-function whenHtml(prefix) {
+export function whenHtml(prefix) {
   return `
     <div class="f">
       <label>When</label>
@@ -43,7 +43,7 @@ function whenHtml(prefix) {
     </div>`;
 }
 
-function bindWhen(root, prefix, onChange) {
+export function bindWhen(root, prefix, onChange) {
   const box = $(`#${prefix}Earlier`, root);
   root.querySelectorAll(`input[name="${prefix}When"]`).forEach((r) => {
     r.addEventListener("change", () => {
@@ -56,7 +56,7 @@ function bindWhen(root, prefix, onChange) {
 }
 
 /** {} for now (the server stamps it), or { date, time } for earlier. */
-function readWhen(root, prefix) {
+export function readWhen(root, prefix) {
   const earlier = $(`input[name="${prefix}When"][value="earlier"]`, root).checked;
   if (!earlier) return {};
   const date = $(`#${prefix}Date`, root).value;
@@ -66,7 +66,7 @@ function readWhen(root, prefix) {
 
 /* -------------------------------- undo toast ------------------------------- */
 
-function undoable(ctx, message, batch) {
+export function undoable(ctx, message, batch) {
   ctx.toast(message, batch ? {
     action: {
       label: "Undo",
@@ -194,7 +194,7 @@ export function openMoveDialog(ctx, m, dest) {
   dialog.showModal();
 }
 
-function showError(root, message) {
+export function showError(root, message) {
   const body = $(".body", root);
   $(".note.err", body)?.remove();
   body.insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(message)}</div>`);
@@ -318,6 +318,9 @@ export function mobPageHtml(ctx, m) {
       </div>
       <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
     </div>
+
+    <h3>Animals</h3>
+    <div id="mobAnimals"><p class="muted small">Loading…</p></div>
 
     <h3>History</h3>
     <ul class="history" id="mobEvents"><li class="muted">Loading…</li></ul>

@@ -233,7 +233,7 @@ export function setGate(
  * unless something has been recorded against it since, in which case that has
  * to be undone first, or the undo would throw away records it never made.
  */
-export function undoBatch(batch: string): { events: number; mobs: number; gates: number } {
+export function undoBatch(batch: string): { events: number; mobs: number; gates: number; animals: number; sessions: number } {
   if (!/^[0-9a-f-]{36}$/.test(batch)) throw new StockError("Nothing to undo");
   return db.transaction(() => {
     const created = db.prepare("SELECT id, name FROM mobs WHERE batch = ?").all(batch) as Array<{ id: number; name: string }>;
@@ -244,11 +244,25 @@ export function undoBatch(batch: string): { events: number; mobs: number; gates:
         throw new StockError(`${m.name} has had other things recorded since; undo those first`);
       }
     }
+    // The same rule for animals a session created.
+    const newAnimals = db.prepare("SELECT id, tag, eid FROM animals WHERE batch = ?").all(batch) as Array<{ id: number; tag: string | null; eid: string | null }>;
+    for (const a of newAnimals) {
+      const later = db.prepare("SELECT COUNT(*) n FROM animal_events WHERE animal_id = ? AND IFNULL(batch, '') != ?")
+        .get(a.id, batch) as { n: number };
+      if (later.n > 0) {
+        throw new StockError(`Animal ${a.tag ?? a.eid} has had other things recorded since; undo those first`);
+      }
+    }
     const events = db.prepare("DELETE FROM mob_events WHERE batch = ?").run(batch).changes;
     const gates = db.prepare("DELETE FROM gate_events WHERE batch = ?").run(batch).changes;
     const mobs = db.prepare("DELETE FROM mobs WHERE batch = ?").run(batch).changes;
-    if (events + gates + mobs === 0) throw new StockError("Nothing to undo — it may already have been undone");
-    return { events, mobs, gates };
+    const animalEvents = db.prepare("DELETE FROM animal_events WHERE batch = ?").run(batch).changes;
+    const animals = db.prepare("DELETE FROM animals WHERE batch = ?").run(batch).changes;
+    const sessions = db.prepare("DELETE FROM weigh_sessions WHERE batch = ?").run(batch).changes;
+    if (events + gates + mobs + animalEvents + animals + sessions === 0) {
+      throw new StockError("Nothing to undo — it may already have been undone");
+    }
+    return { events: events + animalEvents, mobs, gates, animals, sessions };
   })();
 }
 

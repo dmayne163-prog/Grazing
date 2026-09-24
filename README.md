@@ -93,6 +93,23 @@ opening position.
   from the mob's or gate's history. A draft's undo removes the mob it created.
   Imported AgriWebb records can't be undone; they're the record of what happened.
 
+### Individual animals
+
+Animals come in from **scales sessions**: Gallagher TSi, TWR-5 or APS, exported as CSV,
+through Tools → Import. Columns are found by heading (EID, tag or VID, NLIS, date, weight,
+condition score, notes). An animal is matched by EID, then NLIS, then tag. The review
+suggests which mob the animals belong to, with its reasons, and asks you to choose when
+two fit. It can also set the mob's average weight from the session.
+
+An animal belongs to a mob through dated join and leave records, and **its paddock
+history comes from its mob's**, so moving a mob moves every animal in it without a
+record per animal. Search by tag, EID or NLIS from the search box. Each animal's page
+shows its weights with the gain between each, the paddocks it's been in, its history,
+and has Record weight, Add note and Record death. A death can also take one head off
+the mob, or not, where the mob's count already allowed for it. The mob's head count
+stays the authority; animal records are the detail under it, and the mob page flags
+where the two disagree.
+
 ### Movement history
 
 AgriWebb's **Movement records** report (Reports → Movement records, date range set to

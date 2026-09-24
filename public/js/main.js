@@ -5,6 +5,7 @@ import { openImport } from "./importer.js";
 import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
 import { MobLayer } from "./moblayer.js";
+import { loadMobAnimals, renderAnimal, renderAnimalResults } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
 import { escapeHtml, FarmMap, featureAt, kindColour, localGet, localSet } from "./map.js";
 
@@ -28,6 +29,8 @@ const state = {
   grazing: new Map(),
   recordsBegin: null,
   gates: [],
+  /** An individual animal open in the panel, if any. */
+  selectedAnimalId: null,
 };
 
 let farm, editor, mobLayer;
@@ -40,6 +43,7 @@ const ctx = {
   toast: (...a) => toast(...a),
   select: (...a) => select(...a),
   selectMob: (...a) => selectMob(...a),
+  selectAnimal: (id) => selectAnimal(id),
   backToMobs: () => { state.selectedMobId = null; state.tab = "mobs"; render(); },
   /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
   refresh: async () => { await loadStock(); render(); },
@@ -198,15 +202,40 @@ function refreshSearch() {
   $("#searchList").innerHTML = names.join("");
 }
 
+let lastSearch = { q: "", at: 0 };
+
 function onSearch() {
   const q = $("#search").value.trim().toLowerCase();
   if (!q) return;
+  // Enter and the input's change event both land here for one search.
+  if (q === lastSearch.q && Date.now() - lastSearch.at < 800) return;
+  lastSearch = { q, at: Date.now() };
   const hit = state.features.find((f) => f.properties.name.toLowerCase() === q)
     || state.features.find((f) => f.properties.name.toLowerCase().startsWith(q));
   if (hit) {
     select(hit.id, { zoom: true });
     $("#search").blur();
+    return;
   }
+  searchAnimals(q);
+}
+
+async function searchAnimals(q) {
+  let list;
+  try {
+    list = await get(`/api/animals/search?q=${encodeURIComponent(q)}`);
+  } catch (e) {
+    toast(e.message, { error: true });
+    return;
+  }
+  $("#search").blur();
+  if (list.length === 0) { toast(`Nothing found for “${q}”`, { error: true }); return; }
+  if (list.length === 1) { selectAnimal(list[0].id); return; }
+  state.selectedId = null;
+  state.selectedMobId = null;
+  state.selectedAnimalId = null;
+  openSheet(true);
+  renderAnimalResults(ctx, q, list, $("#panelBody"));
 }
 
 /* -------------------------------- selection -------------------------------- */
@@ -214,6 +243,7 @@ function onSearch() {
 function select(id, { zoom = false } = {}) {
   if (state.mode) return;
   state.selectedMobId = null;
+  state.selectedAnimalId = null;
   state.selectedId = id;
   farm.highlight(id);
   if (id !== null && zoom) farm.zoomTo(id);
@@ -330,10 +360,15 @@ async function startSplit() {
 function render() {
   const body = $("#panelBody");
   if (state.mode === "new" || state.mode === "split-name") return; // their own forms are showing
+  if (state.selectedAnimalId !== null) {
+    renderAnimal(ctx, state.selectedAnimalId, body);
+    return;
+  }
   const mob = state.selectedMobId !== null ? mobById(state.selectedMobId) : null;
   if (mob) {
     body.innerHTML = mobPageHtml(ctx, mob);
     bindMobPage(ctx, mob, body);
+    loadMobAnimals(ctx, mob, body.querySelector("#mobAnimals"));
     return;
   }
   const f = state.selectedId !== null ? state.byId.get(state.selectedId) : null;
@@ -342,8 +377,19 @@ function render() {
   else bindOverview();
 }
 
+function selectAnimal(id) {
+  if (state.mode) return;
+  state.selectedId = null;
+  state.selectedMobId = null;
+  farm.highlight(null);
+  state.selectedAnimalId = id;
+  openSheet(true);
+  render();
+}
+
 function selectMob(id) {
   if (state.mode) return;
+  state.selectedAnimalId = null;
   state.selectedId = null;
   farm.highlight(null);
   state.selectedMobId = id;
@@ -555,12 +601,16 @@ function bindOverview() {
   paintSwatches(body);
 
   const imp = $("#importBtn", body);
-  if (imp) imp.onclick = () => openImport($("#dialog"), state.meta, async (message) => {
+  if (imp) imp.onclick = () => openImport($("#dialog"), state.meta, async (message, batch) => {
     await loadStock();
     await loadFeatures();
     farm.fitAll();
     render();
-    toast(message);
+    // An import that came in as one action (a scales session) can be undone.
+    toast(message, batch ? { action: { label: "Undo", run: async () => {
+      try { await send("POST", `/api/undo/${batch}`); await ctx.refresh(); toast("Undone"); }
+      catch (e) { toast(e.message, { error: true }); }
+    } } } : {});
   });
 
   const off = $("#offlineBtn", body);

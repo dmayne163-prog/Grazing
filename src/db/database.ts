@@ -179,6 +179,74 @@ CREATE TABLE IF NOT EXISTS gate_events (
 );
 CREATE INDEX IF NOT EXISTS idx_gate_events_gate ON gate_events(gate_id, date);
 
+-- Individual animals. The EID is the identity where there is one (stored as
+-- 15 digits, no spaces); the management (visual) tag and NLIS number are
+-- searchable too. Head counts stay with the mob: an animal record adds detail
+-- underneath it, it does not replace it.
+CREATE TABLE IF NOT EXISTS animals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  eid         TEXT UNIQUE,
+  tag         TEXT,
+  nlis        TEXT,
+  sex         TEXT,
+  breed       TEXT,
+  birth_date  TEXT,
+  origin      TEXT,
+  -- Alive, dead or sold is not stored here: it is worked out from the
+  -- animal's events, so undoing a recorded death brings it back to life.
+  data        TEXT    NOT NULL DEFAULT '{}',
+  source      TEXT    NOT NULL,
+  batch       TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_animals_tag ON animals(tag COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_animals_nlis ON animals(nlis);
+
+-- Everything that happens to one animal, dated:
+--   join / leave  it enters or leaves a mob (mob_id) — which is what places it
+--                 in paddocks, through that mob's own history
+--   weigh         a weight (weight_kg), from a session or entered by hand
+--   score         a condition score
+--   note          free text
+--   death / sale  and it is no longer on hand
+CREATE TABLE IF NOT EXISTS animal_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  animal_id  INTEGER NOT NULL,
+  date       TEXT    NOT NULL,
+  time       TEXT,
+  kind       TEXT    NOT NULL,
+  mob_id     INTEGER,
+  weight_kg  REAL,
+  score      REAL,
+  text       TEXT,
+  session_id INTEGER,
+  data       TEXT    NOT NULL DEFAULT '{}',
+  source     TEXT    NOT NULL,
+  batch      TEXT,
+  username   TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (animal_id) REFERENCES animals(id)
+);
+CREATE INDEX IF NOT EXISTS idx_animal_events_animal ON animal_events(animal_id, date);
+CREATE INDEX IF NOT EXISTS idx_animal_events_mob ON animal_events(mob_id);
+CREATE INDEX IF NOT EXISTS idx_animal_events_batch ON animal_events(batch);
+
+-- A weighing or processing session from the scales (Gallagher TSi, TWR-5,
+-- APS), kept so each weight can say where it came from.
+CREATE TABLE IF NOT EXISTS weigh_sessions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT    NOT NULL,
+  date         TEXT    NOT NULL,
+  source       TEXT    NOT NULL,
+  filename     TEXT,
+  animal_count INTEGER NOT NULL,
+  mob_id       INTEGER,
+  batch        TEXT,
+  username     TEXT,
+  created_at   INTEGER NOT NULL
+);
+
 -- Rain gauges, optionally tied to a point on the map.
 CREATE TABLE IF NOT EXISTS rain_gauges (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

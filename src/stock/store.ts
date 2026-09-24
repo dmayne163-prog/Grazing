@@ -320,7 +320,7 @@ export function updateMob(id: number, edit: MobEdit): MobRow | null {
 
 /* ----------------------------- grazing history --------------------------- */
 
-interface Segment {
+export interface Segment {
   mob_id: number;
   from: string;
   /** Exclusive: the date the mob's position or head next changed. Null while current. */
@@ -334,7 +334,7 @@ interface Segment {
  * each with the date it began and ended. Several events on one day are taken
  * together, so a mob drafted and moved in a morning is one change, not three.
  */
-function allSegments(): Segment[] {
+export function allSegments(): Segment[] {
   const rows = db.prepare(
     `SELECT * FROM mob_events ORDER BY mob_id, ${EVENT_ORDER}`
   ).all() as MobEventRow[];
