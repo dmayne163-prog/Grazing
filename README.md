@@ -113,6 +113,41 @@ npm run test:import -- path/to/export.json
 
 ## Deploying to Unraid
 
-Copy the source to the server and run `./deploy/build-on-unraid.sh`. It serves on port
-**8081** (tank-monitor has 8080) with data in `/mnt/user/appdata/grazing`. Cloudflare
-Access values go in `/mnt/user/appdata/grazing/local.env`, never in the repo.
+The image is built on the server, like tank-monitor's (better-sqlite3 compiles a native
+binding). It serves on port **8081** (tank-monitor has 8080) with data in
+`/mnt/user/appdata/grazing`. Cloudflare Access values go in
+`/mnt/user/appdata/grazing/local.env`, never in the repo.
+
+Ship the source as an archive of a commit, not a copy of the working folder. That leaves
+behind `node_modules`, the dev `.env` (which turns the login off) and the dev database:
+
+```bash
+git archive --format=tar.gz -o ../grazing-src.tar.gz HEAD
+```
+
+On the server, unpack into a clean directory each time. A fresh directory can't end up
+with the old tree nested inside it, which is the scp trap described in tank-monitor's README:
+
+```bash
+rm -rf /mnt/user/appdata/grazing-src && mkdir -p /mnt/user/appdata/grazing-src
+tar -xzf /mnt/user/appdata/grazing-src.tar.gz -C /mnt/user/appdata/grazing-src
+cd /mnt/user/appdata/grazing-src && bash ./deploy/build-on-unraid.sh
+```
+
+### Carrying a database across
+
+To start the server with records already imported elsewhere, put a copy of the database
+at `/mnt/user/appdata/grazing/grazing.db` **before the container first starts**, or
+stop the container while replacing it. Use Tools → Download a backup (or a nightly file
+from `backups/`) rather than copying a live `grazing.db`: those are consistent
+snapshots, while the live file may have recent writes still sitting in its WAL.
+
+A database made on a dev machine usually has no accounts. The first administrator is
+then created on first sign-in, from the farm network only.
+
+### Backups
+
+Every night at `BACKUP_HOUR` (2 am by default) the database copies itself to
+`/mnt/user/appdata/grazing/backups/`, keeping `BACKUP_KEEP` (30) days. The same folder
+sits inside Unraid's appdata backup, so each copy exists in two places. Download one
+occasionally from Tools to keep a third copy off the server.
