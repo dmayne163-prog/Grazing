@@ -46,15 +46,15 @@ function pathStyle(f, selected) {
   let s;
   switch (kind) {
     case "paddock":
-      s = openGroup.has(f.id)
-        // Open into another paddock: green, like an open gate, so a set of
-        // paddocks with the gates open between them reads as one.
-        ? { color: OPEN, weight: 3, opacity: 1, fillColor: OPEN, fillOpacity: 0.16 }
-        : {
-          color: colour, weight: 1.6, opacity: 0.95,
-          fillColor: colour,
-          fillOpacity: subtype === "cultivation" || subtype === "holding" ? 0.12 : 0.03,
-        };
+      s = {
+        color: colour, weight: 1.6, opacity: 0.95,
+        fillColor: colour,
+        fillOpacity: subtype === "cultivation" || subtype === "holding" ? 0.12 : 0.03,
+      };
+      // Open into another paddock: tinted green like an open gate. Only the
+      // group's outside fence is drawn green (see outsideEdges); the fences
+      // inside it keep their ordinary colour.
+      if (openGroup.has(f.id)) Object.assign(s, { fillColor: OPEN, fillOpacity: 0.16 });
       break;
     case "boundary":
       s = { color: colour, weight: 3, dashArray: "10 6", fill: false };
@@ -294,10 +294,22 @@ export class FarmMap {
       const layer = this.layersById.get(id);
       if (layer) restyle(layer, id === this.selectedId);
     }
-    // On top of their neighbours, or a shared fence is drawn in the
-    // neighbour's colour and the green edge is lost along it.
-    for (const id of openGroup.keys()) this.layersById.get(id)?.bringToFront();
-    if (this.selectedId !== null) this.layersById.get(this.selectedId)?.bringToFront?.();
+    // The outside fence of each group, drawn above the paddocks so a
+    // neighbour's outline never covers it.
+    if (!this.map.getPane("openEdges")) this.map.createPane("openEdges").style.zIndex = 440;
+    const paddocks = this.groups.get("paddock");
+    if (this._edges) paddocks.removeLayer(this._edges);
+    const geomOf = (id) => this.layersById.get(id)?.feature.geometry;
+    const lines = [];
+    for (const [id, others] of openGroup) {
+      const g = geomOf(id);
+      if (g) lines.push(...outsideEdges(g, others.map(geomOf).filter(Boolean)));
+    }
+    this._edges = L.polyline(lines, {
+      pane: "openEdges", color: OPEN, weight: 3.5, opacity: 1, interactive: false,
+      lineCap: "round", lineJoin: "round",
+    });
+    paddocks.addLayer(this._edges);
   }
 
   /* ----------------------------- drop target ------------------------------ */
@@ -366,6 +378,77 @@ function restyle(layer, selected) {
   const f = layer.feature;
   if (f.geometry.type === "Point") layer.setStyle(pointStyle(f, selected));
   else layer.setStyle(pathStyle(f, selected));
+}
+
+/* ------------------------------- outside edges ----------------------------- */
+
+/** Pieces no longer than this are tested one by one. */
+const PIECE_M = 25;
+/** A piece this close to another paddock in the group is a shared, now internal, fence. */
+const SHARED_M = 20;
+
+/**
+ * The parts of a paddock's boundary that are not shared with the other
+ * paddocks in its group, as [lat, lng] lines.
+ *
+ * Imported boundaries seldom meet exactly — neighbouring edges wander a few
+ * metres apart and have different corners — so rather than merge shapes, each
+ * edge is cut into short pieces and a piece counts as shared when it runs
+ * within SHARED_M of another member's boundary.
+ */
+function outsideEdges(geometry, others) {
+  const rings = (g) => (g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : []);
+  const mine = rings(geometry);
+  if (!mine.length) return [];
+  const lat0 = mine[0][0][1];
+  const kx = Math.cos((lat0 * Math.PI) / 180) * 111_320, ky = 110_574;
+  const toXY = ([lon, lat]) => [lon * kx, lat * ky];
+
+  // The other members' edges as metre segments, with a bounding box each so
+  // most can be skipped without measuring.
+  const segs = [];
+  for (const g of others) {
+    for (const ring of rings(g)) {
+      for (let i = 1; i < ring.length; i++) {
+        const a = toXY(ring[i - 1]), b = toXY(ring[i]);
+        segs.push([a, b, Math.min(a[0], b[0]) - SHARED_M, Math.max(a[0], b[0]) + SHARED_M,
+          Math.min(a[1], b[1]) - SHARED_M, Math.max(a[1], b[1]) + SHARED_M]);
+      }
+    }
+  }
+  const nearOther = (p) => {
+    for (const [a, b, x0, x1, y0, y1] of segs) {
+      if (p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1) continue;
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = dx * dx + dy * dy;
+      const t = len ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len)) : 0;
+      if (Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy) <= SHARED_M) return true;
+    }
+    return false;
+  };
+
+  const out = [];
+  for (const ring of mine) {
+    let run = null;
+    for (let i = 1; i < ring.length; i++) {
+      const [lonA, latA] = ring[i - 1], [lonB, latB] = ring[i];
+      const [ax, ay] = toXY(ring[i - 1]), [bx, by] = toXY(ring[i]);
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / PIECE_M));
+      for (let k = 0; k < n; k++) {
+        const t0 = k / n, t1 = (k + 1) / n, tm = (t0 + t1) / 2;
+        const outside = !nearOther([ax + (bx - ax) * tm, ay + (by - ay) * tm]);
+        const p0 = [latA + (latB - latA) * t0, lonA + (lonB - lonA) * t0];
+        const p1 = [latA + (latB - latA) * t1, lonA + (lonB - lonA) * t1];
+        if (outside) {
+          if (!run) { run = [p0]; out.push(run); }
+          run.push(p1);
+        } else {
+          run = null;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /* ------------------------------ interior point ----------------------------- */
