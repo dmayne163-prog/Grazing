@@ -173,8 +173,16 @@ export async function loadMobAnimals(ctx, m, el) {
     return;
   }
   if (!el.isConnected) return;
+  const importBtn = ctx.canEdit
+    ? `<div class="btns"><button class="btn" id="mImportSession">Import a cattle session for this mob…</button></div>`
+    : "";
+  const bindImport = () => {
+    const b = el.querySelector("#mImportSession");
+    if (b) b.onclick = () => ctx.startImport("session", m.id);
+  };
   if (!list.length) {
-    el.innerHTML = '<p class="muted small">No individual animal records. Import a session from the scales (Tools → Import) to add them.</p>';
+    el.innerHTML = `<p class="muted small">No individual animal records yet. A session from the scales adds them, with their EIDs, tags and weights.</p>${importBtn}`;
+    bindImport();
     return;
   }
   const alive = list.filter((a) => a.status === "alive");
@@ -189,6 +197,8 @@ export async function loadMobAnimals(ctx, m, el) {
       <td class="num">${a.last_weight_kg != null ? `${nf0.format(a.last_weight_kg)} kg` : ""}</td>
       <td class="muted small">${day(a.last_weighed)}</td></tr>`).join("")}
     </tbody></table>`;
+  el.insertAdjacentHTML("beforeend", importBtn);
+  bindImport();
   el.querySelectorAll("[data-animal]").forEach((tr) => {
     tr.onclick = () => ctx.selectAnimal(Number(tr.dataset.animal));
   });

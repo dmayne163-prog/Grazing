@@ -483,3 +483,8 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .history li.voided .what{text-decoration:line-through;color:var(--ink-3)}
 .muted-link{color:var(--ink-3)}
 .muted-link:hover{color:var(--accent)}
+
+/* Import choices: what it is in bold, what it takes underneath. */
+.importlist{display:grid;gap:8px}
+.importlist .btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:10px 12px}
+.importlist .btn span{font-weight:400;font-size:12px;color:var(--ink-3)}

@@ -19,8 +19,40 @@ const fmtArea = (c) =>
     : c.length_m != null ? `${(c.length_m / 1000).toLocaleString("en-AU", { maximumFractionDigits: 2 })} km`
     : "";
 
-export function openImport(dialog, meta, onDone) {
+/**
+ * What the picker says for each way in. The review screens are the same
+ * whichever button was used — a file is recognised by its contents — but
+ * the words and the file types offered match what was asked for.
+ */
+const PICKERS = {
+  any: {
+    title: "Import",
+    accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv",
+    help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
+      Records: AgriWebb exports (.xlsx).<br>
+      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).`,
+  },
+  map: {
+    title: "Import a map",
+    accept: ".json,.geojson,.kml,.kmz,.zip",
+    help: "Paddocks, water points and gates: an AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.",
+  },
+  records: {
+    title: "Import AgriWebb records",
+    accept: ".xlsx",
+    help: "An export from AgriWebb (.xlsx): the mob list, the paddock list, the Movement records report or the rainfall report.",
+  },
+  session: {
+    title: "Import a cattle session",
+    accept: ".csv",
+    help: `A weighing or processing session from the scales — Gallagher TSi, TWR-5 or APS — saved as a .csv file.<br>
+      Each animal's EID, tag, weight and notes come in, and you choose which mob they belong to.`,
+  },
+};
+
+export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } = {}) {
   const kinds = meta.kinds;
+  const picker = PICKERS[kind] || PICKERS.any;
 
   function kindOptions(cls, selected) {
     return kinds
@@ -34,16 +66,13 @@ export function openImport(dialog, meta, onDone) {
   function showPicker(error) {
     dialog.innerHTML = `
       <div class="dlg">
-        <header><h2>Import</h2></header>
+        <header><h2>${escapeHtml(picker.title)}</h2></header>
         <div class="body">
           ${error ? `<div class="note err">${escapeHtml(error)}</div>` : ""}
           <label class="drop" id="drop">
-            <input type="file" id="file" accept=".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv" hidden>
+            <input type="file" id="file" accept="${picker.accept}" hidden>
             <p><b>Choose a file</b> or drop it here</p>
-            <p class="muted">Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz),<br>
-            a zipped shapefile (.zip) or GeoJSON.<br>
-            Records: AgriWebb exports (.xlsx).<br>
-            Animals: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).</p>
+            <p class="muted">${picker.help}</p>
           </label>
           <p class="muted small gap-top">
             Nothing is added until you have reviewed it on the next screen.
@@ -340,7 +369,7 @@ export function openImport(dialog, meta, onDone) {
     // Only pre-select a mob when one clearly leads; two close candidates are
     // for you to choose between, not for the app to guess.
     const [first, second] = p.suggestions;
-    const clear = first && (!second || first.score - second.score >= 15);
+    const clear = !mobId && first && (!second || first.score - second.score >= 15);
     const others = (p.allMobs || []).filter((m) => !p.suggestions.some((sg) => sg.mob_id === m.id));
 
     dialog.innerHTML = `
@@ -405,6 +434,14 @@ export function openImport(dialog, meta, onDone) {
         : "";
     };
     dialog.querySelectorAll('input[name="sMob"]').forEach((r) => r.addEventListener("change", update));
+    if (mobId) {
+      const listed = dialog.querySelector(`input[name="sMob"][value="${mobId}"]`);
+      if (listed) listed.checked = true;
+      else if (dialog.querySelector("#sOther")) {
+        dialog.querySelector("#sOther").value = String(mobId);
+        dialog.querySelector('input[name="sMob"][value="other"]').checked = true;
+      }
+    }
     dialog.querySelector("#sOther")?.addEventListener("change", () => {
       dialog.querySelector('input[name="sMob"][value="other"]').checked = true;
       update();

@@ -45,6 +45,7 @@ const ctx = {
   selectMob: (...a) => selectMob(...a),
   selectAnimal: (id) => selectAnimal(id),
   backToMobs: () => { state.selectedMobId = null; state.tab = "mobs"; render(); },
+  startImport: (kind, mobId) => startImport(kind, mobId),
   /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
   refresh: async () => { await loadStock(); render(); },
 };
@@ -534,8 +535,12 @@ function toolsHtml() {
   return `
     ${canEdit() ? `
       <h3>Import</h3>
-      <p class="muted small">Bring in paddocks and water points from an AgriWebb map export, Google Earth, or a shapefile. You review everything before it is added.</p>
-      <div class="btns"><button class="btn primary" id="importBtn">Import a map file…</button></div>
+      <p class="muted small">Everything is shown for you to check before anything is added.</p>
+      <div class="importlist">
+        <button class="btn" data-import="session"><b>Import a cattle session…</b><span>From the scales: Gallagher TSi, TWR-5 or APS (.csv)</span></button>
+        <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
+        <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
+      </div>
     ` : ""}
 
     <h3>Export</h3>
@@ -600,17 +605,8 @@ function bindOverview() {
   };
   paintSwatches(body);
 
-  const imp = $("#importBtn", body);
-  if (imp) imp.onclick = () => openImport($("#dialog"), state.meta, async (message, batch) => {
-    await loadStock();
-    await loadFeatures();
-    farm.fitAll();
-    render();
-    // An import that came in as one action (a scales session) can be undone.
-    toast(message, batch ? { action: { label: "Undo", run: async () => {
-      try { await send("POST", `/api/undo/${batch}`); await ctx.refresh(); toast("Undone"); }
-      catch (e) { toast(e.message, { error: true }); }
-    } } } : {});
+  body.querySelectorAll("[data-import]").forEach((b) => {
+    b.onclick = () => startImport(b.dataset.import);
   });
 
   const off = $("#offlineBtn", body);
@@ -625,6 +621,24 @@ function bindOverview() {
   }).catch(() => {});
   const del = $("#showDeleted", body);
   if (del) del.onclick = () => showDeleted();
+}
+
+/**
+ * Opens the import dialog for one kind of file. A map import refits the map
+ * to the property; any import that came in as one action (a cattle session)
+ * can be undone from its confirmation.
+ */
+function startImport(kind, mobId = null) {
+  openImport($("#dialog"), state.meta, async (message, batch) => {
+    await loadStock();
+    await loadFeatures();
+    if (kind === "map") farm.fitAll();
+    render();
+    toast(message, batch ? { action: { label: "Undo", run: async () => {
+      try { await send("POST", `/api/undo/${batch}`); await ctx.refresh(); toast("Undone"); }
+      catch (e) { toast(e.message, { error: true }); }
+    } } } : {});
+  }, { kind, mobId });
 }
 
 /** Swatch colours are set through the CSSOM, which the CSP allows, not style attributes. */
@@ -1107,6 +1121,9 @@ start();
 /* ---------------------------------- mobs ----------------------------------- */
 
 function mobsTable() {
+  const importBtn = canEdit()
+    ? `<div class="btns"><button class="btn" data-import="session">Import a cattle session…</button></div>`
+    : "";
   if (state.mobs.length === 0) {
     return `<p class="muted small">No mobs yet. ${canEdit() ? "Import AgriWebb's mob list (.xlsx) from <b>Tools</b>." : ""}</p>`;
   }
@@ -1123,6 +1140,7 @@ function mobsTable() {
   const agisted = mobs.filter((m) => m.owner);
   const head = `<thead><tr><th>Mob</th><th class="num">Head</th><th class="num">Weight</th><th class="num">AE</th></tr></thead>`;
   return `
+    ${importBtn}
     <h3>Own stock · ${nf0.format(ownHead(own))} head · ${nf0.format(total(own))} AE</h3>
     <table class="list">${head}<tbody>${rows(own)}</tbody></table>
     ${agisted.length ? `
