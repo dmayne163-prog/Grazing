@@ -1,0 +1,18 @@
+node_modules/
+dist/
+data/
+data-test/
+.env
+*.log
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+
+# Farm exports hold the property's real boundaries and are imported through
+# the app, never committed.
+*.agriwebb.json
+exports/
+
+# Real Cloudflare Access values for the deploy script. Server-side only.
+deploy/local.env

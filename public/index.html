@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0C1012">
+  <title>Grazing</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/vendor/geoman/leaflet-geoman.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <h1 id="propName">Grazing</h1>
+    <div class="search">
+      <input id="search" type="search" placeholder="Find a paddock or water point…" autocomplete="off" list="searchList">
+      <datalist id="searchList"></datalist>
+    </div>
+    <div class="status" id="netStatus" hidden>Offline — showing saved copy</div>
+    <div class="whoami">
+      <span id="whoName"></span>
+      <button class="linkbtn" id="signOut">Sign out</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div id="map" aria-label="Farm map"></div>
+
+    <!-- Drawing tools. Admin only; hidden for read-only accounts. -->
+    <div class="tools" id="tools" hidden>
+      <button data-draw="paddock" title="Draw a paddock">Paddock</button>
+      <button data-draw="fence" title="Draw a fence line">Fence</button>
+      <button data-draw="water" title="Place a water point">Water</button>
+      <button data-draw="infrastructure" title="Place a gate, yards, etc.">Gate / infra</button>
+      <button data-draw="more" title="Other shapes">More…</button>
+    </div>
+
+    <div class="mapbtns">
+      <button id="locateBtn" class="iconbtn" title="Show where I am" aria-label="Show where I am">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <button id="fitBtn" class="iconbtn" title="Show the whole property" aria-label="Show the whole property">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+    </div>
+
+    <div class="where" id="whereAmI" hidden></div>
+
+    <!-- Shown while drawing or reshaping, so there is always a clear way out. -->
+    <div class="modebar" id="modebar" hidden>
+      <span id="modeText"></span>
+      <button class="primary" id="modeDone" hidden>Save shape</button>
+      <button id="modeCancel">Cancel</button>
+    </div>
+
+    <aside class="panel" id="panel">
+      <button class="grip" id="grip" aria-label="Expand or collapse the panel"></button>
+      <div class="panel-body" id="panelBody"></div>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+
+<dialog id="dialog"></dialog>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/geoman/leaflet-geoman.min.js"></script>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

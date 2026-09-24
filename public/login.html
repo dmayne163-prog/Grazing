@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in · Wealwandangie Grazing</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/login.css">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+</head>
+<body>
+  <form class="card" id="form" autocomplete="on">
+    <h1 id="heading">Wealwandangie Grazing</h1>
+    <p class="sub" id="sub">Sign in to continue.</p>
+
+    <div class="setupnote" id="setupNote" hidden>
+      No account exists yet. The details you enter here become the
+      administrator account — nobody else can create one afterwards.
+    </div>
+
+    <div class="f">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false" required>
+    </div>
+    <div class="f">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password"
+             autocomplete="current-password" required>
+    </div>
+
+    <button class="submit" id="submit" type="submit">Sign in</button>
+    <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  </form>
+
+<script src="/login.js"></script>
+</body>
+</html>

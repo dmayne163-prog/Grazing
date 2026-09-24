@@ -1,0 +1,73 @@
+/*
+ * Sign-in page styling.
+ *
+ * Lifted out of a <style> block in login.html so the Content-Security-Policy
+ * can forbid inline styles outright. An inline block would have forced
+ * style-src 'unsafe-inline', which weakens the policy across every page.
+ */
+body { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
+
+.card {
+  width: min(380px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 26px 24px 22px;
+}
+.card h1 { font-size: 24px; margin: 0 0 4px; line-height: 1.15; }
+.card .sub { font-size: 13px; color: var(--ink-3); margin: 0 0 20px; line-height: 1.5; }
+
+.f { margin-bottom: 14px; }
+.f label {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ink-3);
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.f input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  padding: 10px 11px;
+  font-size: 15px;
+  font-family: var(--sans);
+}
+.f input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.submit {
+  width: 100%;
+  background: var(--accent);
+  color: #06222F;
+  border: 0;
+  border-radius: 8px;
+  padding: 11px;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.submit:hover:not([disabled]) { filter: brightness(1.08); }
+.submit[disabled] { opacity: .55; cursor: not-allowed; }
+
+.msg { font-size: 13px; margin-top: 14px; line-height: 1.5; min-height: 1em; }
+.msg.err { color: var(--crit); }
+.msg.ok { color: var(--good); }
+
+.setupnote {
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 7px;
+  margin: 0 0 18px;
+}

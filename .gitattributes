@@ -1,0 +1,7 @@
+# Normalise to LF in the repository. The app is built and run in a Linux
+# container, and deploy/build-on-unraid.sh must not reach the server with CRLF
+# line endings or its shebang breaks.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

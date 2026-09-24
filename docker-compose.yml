@@ -1,0 +1,21 @@
+services:
+  grazing:
+    build: .
+    image: grazing:latest
+    container_name: grazing
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      # On Unraid point this at /mnt/user/appdata/grazing
+      - ./data:/data
+    environment:
+      PROPERTY_NAME: "Wealwandangie"
+      TZ: "Australia/Brisbane"
+      TILE_MAX_AGE_DAYS: "180"
+      REQUIRE_AUTH: "true"
+      SETUP_LAN_ONLY: "true"
+      CF_ACCESS_REQUIRED: "true"
+      # CF_ACCESS_TEAM_DOMAIN: ""
+      # CF_ACCESS_AUD: ""
+      LOG_LEVEL: "info"

@@ -1,0 +1,39 @@
+{
+  "name": "wealwandangie-grazing",
+  "version": "0.1.0",
+  "description": "Wealwandangie Grazing — farm map, mob movements, rainfall and pasture projections. Replaces the parts of AgriWebb this property actually uses.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "dev": "npm run build && npm start",
+    "sample-map": "node dev/make-sample-map.mjs",
+    "test:import": "npm run build && node dev/test-import.mjs"
+  },
+  "dependencies": {
+    "@geoman-io/leaflet-geoman-free": "^2.20.2",
+    "@tmcw/togeojson": "^7.1.2",
+    "@turf/difference": "^7.4.0",
+    "@turf/helpers": "^7.4.0",
+    "@turf/intersect": "^7.4.0",
+    "@xmldom/xmldom": "^0.9.12",
+    "better-sqlite3": "^11.10.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.22.3",
+    "fflate": "^0.8.3",
+    "geographiclib-geodesic": "^2.2.0",
+    "leaflet": "^1.9.4",
+    "shpjs": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^4.17.25",
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^22.20.4",
+    "typescript": "^5.9.3"
+  }
+}
