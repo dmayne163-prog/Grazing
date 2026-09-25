@@ -2,7 +2,9 @@ import { Router, type Request, type Response } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent } from "../db/database.js";
 import { logger } from "../logger.js";
-import { animalDeath, animalsInMob, animalView, noteAnimal, searchAnimals, weighAnimal } from "../animals/store.js";
+import {
+  animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, updateAnimal, weighAnimal,
+} from "../animals/store.js";
 import { parseWhen, StockError } from "../stock/actions.js";
 
 const log = logger("animals");
@@ -24,6 +26,28 @@ function act(req: Request, res: Response, what: string, fn: () => unknown) {
     res.status(500).json({ error: "Something went wrong recording that" });
   }
 }
+
+animalApi.get("/animals", (req, res) => {
+  const mob = req.query["mob"] ? Number(req.query["mob"]) : null;
+  res.json(listAnimals({
+    q: typeof req.query["q"] === "string" ? req.query["q"] : "",
+    status: typeof req.query["status"] === "string" ? req.query["status"] : "alive",
+    mob: Number.isInteger(mob) ? mob : null,
+  }));
+});
+
+animalApi.patch("/animals/:id", requireAdmin, (req, res) => {
+  act(req, res, `edited the details of animal #${req.params["id"]}`, () => {
+    updateAnimal(Number(req.params["id"]), (req.body ?? {}) as Record<string, unknown>);
+    return {};
+  });
+});
+
+animalApi.post("/animals/:id/sale", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(req, res, `recorded the sale of animal #${req.params["id"]}`, () =>
+    animalSale(Number(req.params["id"]), parseWhen(b["date"], b["time"]), b, who(req)));
+});
 
 animalApi.get("/animals/search", (req, res) => {
   res.json(searchAnimals(String(req.query["q"] ?? "")));

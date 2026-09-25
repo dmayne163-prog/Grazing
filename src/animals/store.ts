@@ -79,6 +79,10 @@ export interface AnimalSummary {
   eid: string | null;
   tag: string | null;
   nlis: string | null;
+  sex: string | null;
+  breed: string | null;
+  birth_date: string | null;
+  status_date: string | null;
   status: string;
   mob_id: number | null;
   mob_name: string | null;
@@ -90,8 +94,10 @@ function summary(a: AnimalRow): AnimalSummary {
   const ev = eventsOf(a.id);
   const w = [...ev].reverse().find((e) => e.kind === "weigh" && e.weight_kg !== null);
   const mob = currentMob(ev);
+  const st = statusOf(ev);
   return {
-    id: a.id, eid: a.eid, tag: a.tag, nlis: a.nlis, status: statusOf(ev).status,
+    id: a.id, eid: a.eid, tag: a.tag, nlis: a.nlis, sex: a.sex, breed: a.breed, birth_date: a.birth_date,
+    status: st.status, status_date: st.date,
     mob_id: mob, mob_name: mobName(mob),
     last_weight_kg: w?.weight_kg ?? null, last_weighed: w?.date ?? null,
   };
@@ -114,6 +120,52 @@ export function searchAnimals(q: string, limit = 25): AnimalSummary[] {
     ORDER BY tag COLLATE NOCASE LIMIT ?
   `).all(like, like, digits.length >= 3 ? digits : "", `%${digits}%`, limit) as AnimalRow[];
   return rows.map(summary);
+}
+
+/**
+ * Every animal, for the Animals tab: filtered by status and mob, optionally
+ * narrowed by the same text search as the search box. Sold and dead animals
+ * are included when asked for — their history is kept.
+ */
+export function listAnimals(opts: { q?: string; status?: string; mob?: number | null; limit?: number }): { total: number; animals: AnimalSummary[] } {
+  const rows = opts.q && opts.q.trim().length >= 2
+    ? searchAnimals(opts.q, 5000)
+    : (db.prepare("SELECT * FROM animals ORDER BY tag COLLATE NOCASE, id").all() as AnimalRow[]).map(summary);
+  const status = opts.status && opts.status !== "all" ? opts.status : null;
+  const filtered = rows.filter((a) =>
+    (status === null || a.status === status) && (opts.mob == null || a.mob_id === opts.mob));
+  return { total: filtered.length, animals: filtered.slice(0, opts.limit ?? 500) };
+}
+
+/* ---------------------------------- edit --------------------------------- */
+
+const SEXES = ["female", "male", "steer"];
+
+/** Corrects or fills in what an animal is: tags, sex, breed, birth date, origin. */
+export function updateAnimal(id: number, input: Record<string, unknown>): void {
+  const a = db.prepare("SELECT * FROM animals WHERE id = ?").get(id) as AnimalRow | undefined;
+  if (!a) throw new StockError("No such animal");
+  const txt = (k: string, max = 60) => {
+    if (!(k in input)) return (a as unknown as Record<string, string | null>)[k] ?? null;
+    const v = input[k];
+    return typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
+  };
+  let eid = a.eid;
+  if ("eid" in input) {
+    const raw = typeof input["eid"] === "string" ? input["eid"].replace(/\D/g, "") : "";
+    eid = raw === "" ? null : raw;
+    if (eid !== null && eid.length < 10) throw new StockError("An EID is 15 digits");
+    if (eid !== null && eid !== a.eid && db.prepare("SELECT 1 FROM animals WHERE eid = ? AND id != ?").get(eid, id)) {
+      throw new StockError("Another animal already has that EID");
+    }
+  }
+  const sex = "sex" in input ? (SEXES.includes(String(input["sex"])) ? String(input["sex"]) : null) : a.sex;
+  const birth = txt("birth_date", 10);
+  if (birth !== null && !/^\d{4}-\d{2}-\d{2}$/.test(birth)) throw new StockError("Give the birth date as a date");
+  db.prepare(`
+    UPDATE animals SET eid = ?, tag = ?, nlis = ?, sex = ?, breed = ?, birth_date = ?, origin = ?, updated_at = ?
+    WHERE id = ?
+  `).run(eid, txt("tag"), txt("nlis", 20), sex, txt("breed"), birth, txt("origin", 120), Date.now(), id);
 }
 
 export function animalsInMob(mobId: number): AnimalSummary[] {
@@ -254,6 +306,51 @@ export function animalDeath(id: number, when: When, cause: string | null, alsoMo
   return { batch };
 }
 
+/**
+ * Records an animal sold: where to, and optionally its sale weight and price.
+ * Like a death, it can also take a head off its mob — unless the mob's count
+ * already allows for the sale.
+ */
+export function animalSale(
+  id: number, when: When,
+  input: { destination?: unknown; weight_kg?: unknown; price?: unknown; price_unit?: unknown; note?: unknown; also_mob?: unknown },
+  username: string | null
+) {
+  const ev = mustBeAnimal(id);
+  if (statusOf(ev).status !== "alive") throw new StockError("This animal is already recorded as dead or sold");
+  const clean = (v: unknown, max = 200) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  const weight = input.weight_kg === undefined || input.weight_kg === null || input.weight_kg === "" ? null : Number(input.weight_kg);
+  if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1500)) throw new StockError("Sale weight must be in kg");
+  const price = input.price === undefined || input.price === null || input.price === "" ? null : Number(input.price);
+  if (price !== null && (!Number.isFinite(price) || price < 0)) throw new StockError("Price must be a number");
+  const unit = ["c/kg", "$/hd"].includes(String(input.price_unit)) ? String(input.price_unit) : null;
+  const mob = currentMob(ev.filter((e) => e.date <= when.date));
+  const batch = randomUUID();
+  db.transaction(() => {
+    if (weight !== null) {
+      addAnimalEvent(id, { date: when.date, time: when.time, kind: "weigh", weight_kg: weight, text: "Sale weight" }, "app", username, batch);
+    }
+    addAnimalEvent(id, {
+      date: when.date, time: when.time, kind: "sale", mob_id: mob, text: clean(input.note, 500),
+      data: {
+        ...(clean(input.destination) ? { destination: clean(input.destination) } : {}),
+        ...(price !== null ? { price, price_unit: unit ?? "$/hd" } : {}),
+      },
+    }, "app", username, batch);
+    if (input.also_mob !== false && mob !== null) {
+      if (!mobViews(when.date, when.time).some((v) => v.mob.id === mob)) {
+        throw new StockError("Its mob had no head on that date, so its count can't be reduced");
+      }
+      const a = db.prepare("SELECT tag, eid FROM animals WHERE id = ?").get(id) as { tag: string | null; eid: string | null };
+      addEvent(mob, {
+        date: when.date, time: when.time, kind: "sale", head_change: -1,
+        data: { animal_id: id, animal: a.tag ?? a.eid, ...(clean(input.destination) ? { note: `to ${clean(input.destination)}` } : {}) },
+      }, "app", username, batch);
+    }
+  })();
+  return { batch };
+}
+
 /* ------------------------------- sessions -------------------------------- */
 
 export interface SessionPlan {
@@ -373,7 +470,7 @@ export function planSession(s: ParsedSession): SessionPlan {
  * the whole session can be undone.
  */
 export function commitSession(
-  s: ParsedSession, opts: { mob_id: number | null; date: string | null; name: string | null; update_mob_weight: boolean; source: string; filename: string },
+  s: ParsedSession, opts: { mob_id: number | null; date: string | null; name: string | null; update_mob_weight: boolean; source: string; filename: string; sold?: { destination: string | null } | null },
   username: string | null
 ): { batch: string; session_id: number; created: number; weighed: number } {
   const date = opts.date ?? s.date;
@@ -411,7 +508,12 @@ export function commitSession(
           addAnimalEvent(a.id, { date: d, kind: "join", mob_id: opts.mob_id, session_id: sid }, `session:${sid}`, username, batch);
         }
       }
-      if (r.weight_kg !== null) {
+      // The same weighing brought in twice (a session imported again, or
+      // exported from both the scales and APS) is only recorded once.
+      const already = r.weight_kg !== null && !!db.prepare(
+        "SELECT 1 FROM animal_events WHERE animal_id = ? AND kind = 'weigh' AND date = ? AND weight_kg = ?"
+      ).get(a.id, d, r.weight_kg);
+      if (r.weight_kg !== null && !already) {
         addAnimalEvent(a.id, { date: d, kind: "weigh", weight_kg: r.weight_kg, session_id: sid, text: r.notes }, `session:${sid}`, username, batch);
         weights.push(r.weight_kg);
         weighed++;
@@ -419,6 +521,15 @@ export function commitSession(
         addAnimalEvent(a.id, { date: d, kind: "note", text: r.notes, session_id: sid }, `session:${sid}`, username, batch);
       }
       if (r.score !== null) addAnimalEvent(a.id, { date: d, kind: "score", score: r.score, session_id: sid }, `session:${sid}`, username, batch);
+      // A sale session: each animal is recorded as sold on the day. Mob head
+      // counts are left alone — for past sales the mob history already has
+      // them, from AgriWebb or from before records began.
+      if (opts.sold && statusOf(eventsOf(a.id)).status === "alive") {
+        addAnimalEvent(a.id, {
+          date: d, kind: "sale", session_id: sid,
+          data: opts.sold.destination ? { destination: opts.sold.destination } : {},
+        }, `session:${sid}`, username, batch);
+      }
     }
 
     if (opts.update_mob_weight && opts.mob_id !== null && weights.length) {

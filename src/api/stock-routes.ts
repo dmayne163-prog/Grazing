@@ -607,6 +607,9 @@ function commitSessionImport(row: ImportRow, body: unknown, username: string | n
       name: typeof b["name"] === "string" && b["name"].trim() ? b["name"].trim() : null,
       update_mob_weight: b["update_mob_weight"] === true,
       source: "gallagher", filename,
+      sold: b["sold"] === true
+        ? { destination: typeof b["destination"] === "string" && b["destination"].trim() ? b["destination"].trim().slice(0, 200) : null }
+        : null,
     }, username);
     return {
       created: r.weighed, batch: r.batch,

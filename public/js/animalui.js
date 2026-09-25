@@ -18,6 +18,12 @@ const span = (from, to) => `${day(from)} – ${to ? day(to) : "now"}`;
 export const eidText = (eid) => (eid && eid.length === 15 ? `${eid.slice(0, 3)} ${eid.slice(3)}` : eid || "");
 const label = (a) => a.tag || eidText(a.eid) || a.nlis || `#${a.id}`;
 const gain = (g) => (g == null ? "" : `${g > 0 ? "+" : ""}${nf1.format(g)} kg/day`);
+const age = (birth) => {
+  if (!birth) return "";
+  const months = Math.floor((Date.now() - Date.parse(`${birth}T00:00:00`)) / (30.44 * 86_400_000));
+  return months < 24 ? `${months} months` : `${Math.floor(months / 12)} yr ${months % 12} mo`;
+};
+const SEX = { female: "Female", male: "Bull / male", steer: "Steer" };
 
 /* --------------------------------- page ------------------------------------ */
 
@@ -34,6 +40,7 @@ export async function renderAnimal(ctx, id, root) {
   const alive = v.status === "alive";
   const last = v.weights[v.weights.length - 1];
   const here = v.paddocks.find((p) => !p.to);
+  const sale = v.events.find((e) => e.kind === "sale");
 
   root.innerHTML = `
     <button class="linkbtn back" id="back">← ${v.mob_id ? escapeHtml(v.mob_name) : "Back"}</button>
@@ -41,16 +48,45 @@ export async function renderAnimal(ctx, id, root) {
     <p class="sub">${[a.eid ? `EID ${escapeHtml(eidText(a.eid))}` : null, a.nlis ? `NLIS ${escapeHtml(a.nlis)}` : null].filter(Boolean).join(" · ") || "No EID recorded"}</p>
 
     <div class="statuscard">
-      <div class="big">${alive ? "" : `<span class="gatestate">${v.status === "dead" ? "Dead" : "Sold"} ${day(v.status_date)}</span> `}
+      <div class="big">${alive ? "" : `<span class="gatestate">${v.status === "dead" ? "Dead" : "Sold"} ${day(v.status_date)}${sale?.data?.destination ? ` to ${escapeHtml(sale.data.destination)}` : ""}</span> `}
         ${v.mob_id ? `<button class="linkbtn" id="aMob">${escapeHtml(v.mob_name)}</button>` : '<span class="muted">Not in a mob</span>'}
         ${here && alive ? ` · ${escapeHtml(here.paddocks.join(" + "))}` : ""}</div>
       <div class="muted small">${last ? `${nf0.format(last.weight_kg)} kg on ${day(last.date)}${last.gain_per_day != null ? ` · ${gain(last.gain_per_day)} since the weighing before` : ""}` : "Not weighed"}</div>
       ${ctx.canEdit && alive ? `<div class="btns">
         <button class="btn primary" id="aWeigh">Record weight…</button>
         <button class="btn" id="aNote">Add note…</button>
+        <button class="btn" id="aSale">Record sale…</button>
         <button class="btn danger" id="aDeath">Record death…</button>
       </div>` : ""}
     </div>
+
+    <h3>Details</h3>
+    <dl class="facts">
+      <dt>Sex</dt><dd>${escapeHtml(SEX[a.sex] || "—")}</dd>
+      <dt>Breed</dt><dd>${escapeHtml(a.breed || "—")}</dd>
+      <dt>Born</dt><dd>${a.birth_date ? `${day(a.birth_date)} <span class="muted">(${age(a.birth_date)})</span>` : "—"}</dd>
+      <dt>Tag</dt><dd>${escapeHtml(a.tag || "—")}</dd>
+      <dt>EID</dt><dd>${escapeHtml(eidText(a.eid) || "—")}</dd>
+      <dt>NLIS</dt><dd>${escapeHtml(a.nlis || "—")}</dd>
+      <dt>Origin</dt><dd>${escapeHtml(a.origin || "—")}</dd>
+      ${sale?.data?.price != null ? `<dt>Sold for</dt><dd>${sale.data.price_unit === "c/kg" ? `${nf1.format(sale.data.price)} c/kg` : `${nf0.format(sale.data.price)} /hd`}</dd>` : ""}
+    </dl>
+    ${ctx.canEdit ? `<details><summary class="small">Edit details</summary>
+      <div class="row2">
+        <div class="f"><label for="dTag">Tag</label><input id="dTag" value="${escapeHtml(a.tag || "")}" autocomplete="off"></div>
+        <div class="f"><label for="dSex">Sex</label><select id="dSex">${["", "female", "steer", "male"].map((x) => `<option value="${x}"${x === (a.sex || "") ? " selected" : ""}>${x ? SEX[x] : "unknown"}</option>`).join("")}</select></div>
+      </div>
+      <div class="row2">
+        <div class="f"><label for="dBreed">Breed</label><input id="dBreed" value="${escapeHtml(a.breed || "")}" autocomplete="off"></div>
+        <div class="f"><label for="dBirth">Born</label><input id="dBirth" type="date" value="${a.birth_date || ""}"></div>
+      </div>
+      <div class="row2">
+        <div class="f"><label for="dEid">EID</label><input id="dEid" value="${escapeHtml(eidText(a.eid))}" inputmode="numeric" autocomplete="off"></div>
+        <div class="f"><label for="dNlis">NLIS</label><input id="dNlis" value="${escapeHtml(a.nlis || "")}" autocomplete="off"></div>
+      </div>
+      <div class="f"><label for="dOrigin">Origin</label><input id="dOrigin" value="${escapeHtml(a.origin || "")}" placeholder="e.g. bred, or bought from Penjobe" autocomplete="off"></div>
+      <div class="btns"><button class="btn" id="dSave">Save details</button></div>
+    </details>` : ""}
 
     <h3>Weights</h3>
     ${v.weights.length ? `<table class="list"><thead><tr><th>Date</th><th class="num">Weight</th><th class="num">Gain</th><th>From</th></tr></thead><tbody>
@@ -64,7 +100,7 @@ export async function renderAnimal(ctx, id, root) {
     : '<p class="muted small">Not placed in a mob yet, so no paddock history.</p>'}
 
     <h3>History</h3>
-    <ul class="history">${v.events.map((e) => {
+    <ul class="history">${(() => { const seen = new Set(); return v.events.map((e) => {
       const what = {
         join: `Joined ${escapeHtml(e.mob_name || "a mob")}`,
         leave: `Left ${escapeHtml(e.mob_name || "a mob")}`,
@@ -72,13 +108,15 @@ export async function renderAnimal(ctx, id, root) {
         score: `Condition score ${e.score}`,
         note: "Note",
         death: "Died",
-        sale: "Sold",
+        sale: `Sold${e.data?.destination ? ` to ${escapeHtml(e.data.destination)}` : ""}`,
       }[e.kind] || escapeHtml(e.kind);
-      const undo = ctx.canEdit && e.batch && e.source === "app";
+      // One undo per action: a sale with its sale weight is one batch.
+      const undo = ctx.canEdit && e.batch && e.source === "app" && !seen.has(e.batch);
+      if (e.batch) seen.add(e.batch);
       return `<li><span class="when">${day(e.date)}${e.time ? `<br><span class="muted tiny">${escapeHtml(e.time)}</span>` : ""}</span>
         <span class="grow">${what}${e.text ? `<br><span class="muted tiny">${escapeHtml(e.text)}</span>` : ""}${e.source.startsWith("session:") ? '<br><span class="muted tiny">from a scales session</span>' : ""}</span>
         ${undo ? `<button class="linkbtn danger-link" data-undo="${e.batch}">Undo</button>` : ""}</li>`;
-    }).join("") || '<li class="muted">Nothing recorded.</li>'}</ul>`;
+    }).join(""); })() || '<li class="muted">Nothing recorded.</li>'}</ul>`;
 
   $("#back", root).onclick = () => (v.mob_id ? ctx.selectMob(v.mob_id) : ctx.backToMobs());
   const mobBtn = $("#aMob", root);
@@ -105,6 +143,41 @@ export async function renderAnimal(ctx, id, root) {
     submit: async (d) => {
       const r = await send("POST", `/api/animals/${id}/note`, { text: $("#fText", d).value, ...readWhen(d, "f") });
       await done("Note saved", r.batch);
+    },
+  }));
+  $("#dSave", root)?.addEventListener("click", async () => {
+    try {
+      await send("PATCH", `/api/animals/${id}`, {
+        tag: $("#dTag", root).value, sex: $("#dSex", root).value, breed: $("#dBreed", root).value,
+        birth_date: $("#dBirth", root).value, eid: $("#dEid", root).value, nlis: $("#dNlis", root).value,
+        origin: $("#dOrigin", root).value,
+      });
+      await ctx.refresh();
+      ctx.toast("Details saved");
+    } catch (e) {
+      ctx.toast(e.message, { error: true });
+    }
+  });
+  $("#aSale", root)?.addEventListener("click", () => formDialog(ctx, {
+    title: `Record the sale of ${label(a)}`,
+    fields: `<div class="f"><label for="fTo">Sold to</label><input id="fTo" placeholder="buyer, saleyard or abattoir" autocomplete="off"></div>
+      <div class="row2">
+        <div class="f"><label for="fKg">Sale weight (kg)</label><input id="fKg" type="number" min="1" step="0.5" inputmode="decimal" placeholder="optional"></div>
+        <div class="f"><label for="fPrice">Price</label>
+          <div class="pricebox"><input id="fPrice" type="number" min="0" step="0.01" inputmode="decimal" placeholder="optional">
+          <select id="fUnit"><option value="c/kg">c/kg</option><option value="$/hd">$/hd</option></select></div></div>
+      </div>
+      <div class="f"><label for="fNote">Note</label><input id="fNote" placeholder="optional" autocomplete="off"></div>
+      ${v.mob_id ? `<label class="radio"><input type="checkbox" id="fMob" checked> Take 1 hd off ${escapeHtml(v.mob_name)}</label>
+      <p class="muted small">Untick if the mob's count already allows for this sale.</p>` : ""}`,
+    go: "Record sale",
+    submit: async (d) => {
+      const r = await send("POST", `/api/animals/${id}/sale`, {
+        destination: $("#fTo", d).value, weight_kg: $("#fKg", d).value || null,
+        price: $("#fPrice", d).value || null, price_unit: $("#fUnit", d).value, note: $("#fNote", d).value,
+        also_mob: $("#fMob", d)?.checked ?? false, ...readWhen(d, "f"),
+      });
+      await done(`${label(a)} recorded as sold`, r.batch);
     },
   }));
   $("#aDeath", root)?.addEventListener("click", () => formDialog(ctx, {
@@ -202,6 +275,69 @@ export async function loadMobAnimals(ctx, m, el) {
   el.querySelectorAll("[data-animal]").forEach((tr) => {
     tr.onclick = () => ctx.selectAnimal(Number(tr.dataset.animal));
   });
+}
+
+/* ------------------------------ Animals tab -------------------------------- */
+
+/**
+ * Every animal with a record, searchable by tag, EID or NLIS and filtered by
+ * status and mob. The filters are remembered for the session in ctx.animalFilter.
+ */
+export async function renderAnimalsTab(ctx, el) {
+  const f = (ctx.animalFilter ||= { q: "", status: "alive", mob: "" });
+  const mobs = [...ctx.state.mobs].sort((x, y) => x.name.localeCompare(y.name));
+  el.innerHTML = `
+    <div class="f"><input id="anQ" type="search" placeholder="Tag, EID or NLIS number…" value="${escapeHtml(f.q)}" autocomplete="off"></div>
+    <div class="row2">
+      <select id="anStatus" aria-label="Status">
+        ${[["alive", "On hand"], ["sold", "Sold"], ["dead", "Dead"], ["all", "All"]].map(([v, t]) => `<option value="${v}"${f.status === v ? " selected" : ""}>${t}</option>`).join("")}
+      </select>
+      <select id="anMob" aria-label="Mob"><option value="">All mobs</option>${mobs.map((m) => `<option value="${m.id}"${String(m.id) === f.mob ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}</select>
+    </div>
+    <div id="anList"><p class="muted small">Loading…</p></div>
+    ${ctx.canEdit ? '<div class="btns"><button class="btn" data-import="session">Import a cattle session…</button></div>' : ""}`;
+
+  const list = el.querySelector("#anList");
+  let seq = 0;
+  const load = async () => {
+    const mine = ++seq;
+    const params = new URLSearchParams({ q: f.q, status: f.status, ...(f.mob ? { mob: f.mob } : {}) });
+    let r;
+    try {
+      r = await get(`/api/animals?${params}`);
+    } catch (e) {
+      list.innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    if (mine !== seq) return; // a later keystroke has already asked again
+    if (!r.total) {
+      list.innerHTML = `<p class="muted small">${f.q || f.mob || f.status !== "alive" ? "No animals match." : "No individual animal records yet. Import a cattle session to add them."}</p>`;
+      return;
+    }
+    list.innerHTML = `
+      <p class="muted small">${r.total} animal${r.total === 1 ? "" : "s"}${r.total > r.animals.length ? `, showing the first ${r.animals.length}` : ""}</p>
+      <table class="list"><thead><tr><th>Tag</th><th>Sex</th><th>Mob</th><th class="num">Weight</th></tr></thead><tbody>
+      ${r.animals.map((a) => `<tr class="row" data-animal="${a.id}">
+        <td>${escapeHtml(a.tag || eidText(a.eid))}${a.status !== "alive" ? ` <span class="chip">${a.status} ${day(a.status_date)}</span>` : ""}</td>
+        <td class="muted small">${escapeHtml(SEX[a.sex] || "")}</td>
+        <td class="muted small">${escapeHtml(a.mob_name || "")}</td>
+        <td class="num">${a.last_weight_kg != null ? `${nf0.format(a.last_weight_kg)} kg` : ""}</td></tr>`).join("")}
+      </tbody></table>`;
+    list.querySelectorAll("[data-animal]").forEach((tr) => {
+      tr.onclick = () => ctx.selectAnimal(Number(tr.dataset.animal));
+    });
+  };
+  let timer;
+  el.querySelector("#anQ").addEventListener("input", (e) => {
+    f.q = e.target.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(load, 250);
+  });
+  el.querySelector("#anStatus").onchange = (e) => { f.status = e.target.value; load(); };
+  el.querySelector("#anMob").onchange = (e) => { f.mob = e.target.value; load(); };
+  const imp = el.querySelector("[data-import]");
+  if (imp) imp.onclick = () => ctx.startImport("session");
+  load();
 }
 
 /* -------------------------------- search ----------------------------------- */

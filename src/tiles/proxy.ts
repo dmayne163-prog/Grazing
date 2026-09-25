@@ -22,12 +22,20 @@ const log = logger("tiles");
 export interface TileSource {
   id: string;
   label: string;
-  /** {z}/{y}/{x} — ArcGIS order, row before column. */
+  /** Template with {z}, {x} and {y}, in whatever order the service wants them. */
   url: string;
   maxZoom: number;
   attribution: string;
   /** Whether copies may be kept on disk and in the phone's offline cache. */
   cache: boolean;
+  /**
+   * Drawn over the chosen map rather than instead of it — the hillshade,
+   * which is only grey relief on its own but shows the lie of the land when
+   * laid over the imagery.
+   */
+  overlay?: boolean;
+  /** A pale map (the topo): paddock lines and labels are drawn dark on it. */
+  light?: boolean;
 }
 
 export const TILE_SOURCES: TileSource[] = [
@@ -46,6 +54,26 @@ export const TILE_SOURCES: TileSource[] = [
     maxZoom: 19,
     attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
     cache: false,
+  },
+  {
+    // Contours, creeks and spot heights. Volunteer-run: fetched as viewed,
+    // never bulk-downloaded, per its tile usage policy.
+    id: "topo",
+    label: "Topographic (contours)",
+    url: "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+    maxZoom: 17,
+    attribution: "Map © OpenTopoMap (CC-BY-SA), data © OpenStreetMap contributors, SRTM",
+    cache: false,
+    light: true,
+  },
+  {
+    id: "hillshade",
+    label: "Hillshade (relief)",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+    maxZoom: 16,
+    attribution: "Hillshade © Esri, USGS, NGA, NASA",
+    cache: false,
+    overlay: true,
   },
 ];
 

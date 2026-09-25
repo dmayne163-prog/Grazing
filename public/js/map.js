@@ -140,21 +140,35 @@ export class FarmMap {
     this.map.createPane("points").style.zIndex = 450;
 
     this.baseLayers = {};
+    this.overlays = {};
     for (const src of meta.tileSources) {
-      this.baseLayers[src.label] = L.tileLayer(`/tiles/${src.id}/{z}/{x}/{y}`, {
+      const layer = L.tileLayer(`/tiles/${src.id}/{z}/{x}/{y}`, {
         maxNativeZoom: src.maxZoom,
         maxZoom: 21,
         attribution: src.attribution,
-        // Tiles are served by this app, so a failed one is worth retrying on
-        // the next pan rather than being cached as broken by Leaflet.
         crossOrigin: false,
+        // Relief is blended into whatever is underneath (see .relief-layer),
+        // so the imagery keeps its colour and gains shape.
+        ...(src.overlay ? { className: "relief-layer", opacity: 0.85, zIndex: 2 } : {}),
       });
+      if (src.overlay) this.overlays[src.label] = layer;
+      else this.baseLayers[src.label] = layer;
     }
     const saved = localGet("baseLayer");
-    const initial = this.baseLayers[saved] || Object.values(this.baseLayers)[0];
-    initial.addTo(this.map);
-    L.control.layers(this.baseLayers, null, { position: "bottomleft" }).addTo(this.map);
+    const initialName = this.baseLayers[saved] ? saved : Object.keys(this.baseLayers)[0];
+    this.baseLayers[initialName].addTo(this.map);
+    // On a pale map the cream paddock lines and white labels disappear; the
+    // light-base class swaps them for dark ones (see styles.css).
+    const lightNames = new Set(meta.tileSources.filter((s) => s.light).map((s) => s.label));
+    el.classList.toggle("light-base", lightNames.has(initialName));
+    this.map.on("baselayerchange", (e) => el.classList.toggle("light-base", lightNames.has(e.name)));
+    const onOverlays = new Set(JSON.parse(localGet("overlays") || "[]"));
+    for (const [name, layer] of Object.entries(this.overlays)) if (onOverlays.has(name)) layer.addTo(this.map);
+    L.control.layers(this.baseLayers, this.overlays, { position: "bottomleft" }).addTo(this.map);
     this.map.on("baselayerchange", (e) => localSet("baseLayer", e.name));
+    const rememberOverlays = () => localSet("overlays",
+      JSON.stringify(Object.entries(this.overlays).filter(([, l]) => this.map.hasLayer(l)).map(([n]) => n)));
+    this.map.on("overlayadd overlayremove", rememberOverlays);
 
     for (const kind of LAYER_ORDER) {
       const g = L.featureGroup();

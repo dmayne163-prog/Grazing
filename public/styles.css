@@ -488,3 +488,17 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .importlist{display:grid;gap:8px}
 .importlist .btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:10px 12px}
 .importlist .btn span{font-weight:400;font-size:12px;color:var(--ink-3)}
+
+/* Hillshade: grey relief multiplied into the map beneath, so ridges and
+   gullies show on the imagery without washing its colour out. */
+.relief-layer{mix-blend-mode:multiply}
+
+.pricebox{display:flex;gap:6px}
+.pricebox input{flex:1;min-width:0}
+.pricebox select{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:0 6px}
+#animalsTab select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:7px 8px;margin-bottom:10px}
+
+/* Light base map (topo): paddock lines and labels dark instead of cream and
+   white. A CSS stroke overrides the SVG attribute Leaflet sets. */
+.light-base path.leaflet-interactive[stroke="#F2E8C9"]{stroke:#5B4630}
+.light-base .plabel{color:#1d1a16;text-shadow:0 0 3px #fff,0 0 6px #fff,0 1px 2px #fff}

@@ -53,8 +53,8 @@ mapApi.get("/meta", (req, res) => {
     mapCentre: config.mapCentre,
     mapZoom: config.mapZoom,
     kinds: KINDS,
-    tileSources: TILE_SOURCES.map(({ id, label, maxZoom, attribution, cache }) => ({
-      id, label, maxZoom, attribution, cache,
+    tileSources: TILE_SOURCES.map(({ id, label, maxZoom, attribution, cache, overlay, light }) => ({
+      id, label, maxZoom, attribution, cache, overlay: !!overlay, light: !!light,
     })),
     user: req.user ?? null,
     canEdit: !config.requireAuth || req.user?.role === "admin",

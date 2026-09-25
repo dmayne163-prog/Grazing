@@ -401,6 +401,14 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
           <label class="radio gap-top"><input type="checkbox" id="sWeight" checked> Set the mob's average weight from this session</label>
           <p class="muted tiny" id="sWeightNote"></p>
 
+          <h3>Were they sold?</h3>
+          <label class="radio"><input type="checkbox" id="sSold"> These animals were sold at this session</label>
+          <div id="sSoldBox" hidden>
+            <div class="f"><label for="sTo">Sold to</label><input id="sTo" placeholder="buyer, saleyard or abattoir" autocomplete="off"></div>
+            <p class="muted small">Each animal is recorded as sold on the session date, and its history is kept. Mob head counts are
+              left as they are — past sales are already in the mob history.</p>
+          </div>
+
           <details class="gap-top"><summary class="small">The ${p.count} animals</summary>
             <table class="list"><thead><tr><th>Tag</th><th>EID</th><th class="num">Weight</th><th></th></tr></thead><tbody>
               ${p.rows.map((r) => `<tr><td>${escapeHtml(r.tag || "")}</td><td class="muted small">${escapeHtml(eid(r.eid))}</td>
@@ -422,6 +430,15 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
       if (r.value === "other") return dialog.querySelector("#sOther").value ? Number(dialog.querySelector("#sOther").value) : undefined;
       return r.value === "" ? null : Number(r.value);
     };
+    const soldBox = dialog.querySelector("#sSold");
+    soldBox.addEventListener("change", () => {
+      dialog.querySelector("#sSoldBox").hidden = !soldBox.checked;
+      // Sold animals usually belong to no current mob.
+      if (soldBox.checked && !dialog.querySelector('input[name="sMob"]:checked')) {
+        dialog.querySelector('input[name="sMob"][value=""]').checked = true;
+      }
+      update();
+    });
     const update = () => {
       const mob = chosen();
       dialog.querySelector("#commit").disabled = mob === undefined;
@@ -456,6 +473,8 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         const res = await send("POST", `/api/import/records/${p.importId}/commit`, {
           mob_id: mob, name: dialog.querySelector("#sName").value, date: dialog.querySelector("#sDate").value || null,
           update_mob_weight: !!mob && dialog.querySelector("#sWeight").checked,
+          sold: soldBox.checked,
+          destination: dialog.querySelector("#sTo").value,
         });
         dialog.close();
         onDone(`Imported ${res.summary}`, res.batch);
