@@ -3,7 +3,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent } from "../db/database.js";
 import { logger } from "../logger.js";
 import {
-  animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, updateAnimal, weighAnimal,
+  animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, setSexForMob, updateAnimal, weighAnimal,
 } from "../animals/store.js";
 import { parseWhen, StockError } from "../stock/actions.js";
 
@@ -41,6 +41,12 @@ animalApi.patch("/animals/:id", requireAdmin, (req, res) => {
     updateAnimal(Number(req.params["id"]), (req.body ?? {}) as Record<string, unknown>);
     return {};
   });
+});
+
+animalApi.post("/mobs/:id/animals/sex", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(req, res, `set the sex of mob #${req.params["id"]}'s animals to ${String(b["sex"])}`, () =>
+    setSexForMob(Number(req.params["id"]), String(b["sex"]), b["only_missing"] !== false));
 });
 
 animalApi.post("/animals/:id/sale", requireAdmin, (req, res) => {

@@ -45,6 +45,11 @@ export async function renderAnimal(ctx, id, root) {
   root.innerHTML = `
     <button class="linkbtn back" id="back">← ${v.mob_id ? escapeHtml(v.mob_name) : "Back"}</button>
     <h2>${escapeHtml(label(a))}</h2>
+    <p class="animalline">${a.sex
+      ? `<b>${escapeHtml(SEX[a.sex])}</b>`
+      : ctx.canEdit
+        ? `<span class="muted">Sex not recorded:</span> ${["female", "steer", "male"].map((x) => `<button class="chipbtn" data-sex="${x}">${SEX[x]}</button>`).join("")}`
+        : '<span class="muted">Sex not recorded</span>'}${[a.breed, a.birth_date ? age(a.birth_date) : null].filter(Boolean).map((t) => ` · ${escapeHtml(t)}`).join("")}</p>
     <p class="sub">${[a.eid ? `EID ${escapeHtml(eidText(a.eid))}` : null, a.nlis ? `NLIS ${escapeHtml(a.nlis)}` : null].filter(Boolean).join(" · ") || "No EID recorded"}</p>
 
     <div class="statuscard">
@@ -145,6 +150,16 @@ export async function renderAnimal(ctx, id, root) {
       await done("Note saved", r.batch);
     },
   }));
+  root.querySelectorAll("[data-sex]").forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await send("PATCH", `/api/animals/${id}`, { sex: b.dataset.sex });
+        await ctx.refresh();
+      } catch (e) {
+        ctx.toast(e.message, { error: true });
+      }
+    };
+  });
   $("#dSave", root)?.addEventListener("click", async () => {
     try {
       await send("PATCH", `/api/animals/${id}`, {
@@ -265,13 +280,31 @@ export async function loadMobAnimals(ctx, m, el) {
     <p class="small">${alive.length === m.head ? `All ${m.head} hd have records` : `${alive.length} animal records for ${m.head} hd`}${list.length > alive.length ? ` (plus ${list.length - alive.length} dead or sold)` : ""}${mean ? ` · latest weights average <b>${nf0.format(mean)} kg</b>` : ""}.</p>
     ${alive.length > m.head ? `<p class="note warn small">${alive.length - m.head} more animal record${alive.length - m.head === 1 ? "" : "s"} than head. If the mob has had deaths or sales, open the animal and record it — untick “take 1 hd off” where the mob's count already allows for it.</p>`
       : alive.length < m.head ? `<p class="muted tiny">${m.head - alive.length} hd have no individual record yet.</p>` : ""}
+    ${ctx.canEdit && alive.some((a) => !a.sex) ? `<div class="setsex small">
+      <span>${alive.filter((a) => !a.sex).length} without a sex recorded. Set them all to</span>
+      ${["female", "steer", "male"].map((x) => `<button class="chipbtn" data-mobsex="${x}">${SEX[x]}</button>`).join("")}
+    </div>` : ""}
     <table class="list"><tbody>${list.map((a) => `
       <tr class="row" data-animal="${a.id}"><td>${escapeHtml(a.tag || eidText(a.eid))}${a.status !== "alive" ? ` <span class="chip">${a.status}</span>` : ""}</td>
+      <td class="muted small">${escapeHtml(SEX[a.sex] || "")}</td>
       <td class="num">${a.last_weight_kg != null ? `${nf0.format(a.last_weight_kg)} kg` : ""}</td>
       <td class="muted small">${day(a.last_weighed)}</td></tr>`).join("")}
     </tbody></table>`;
   el.insertAdjacentHTML("beforeend", importBtn);
   bindImport();
+  el.querySelectorAll("[data-mobsex]").forEach((b) => {
+    b.onclick = async () => {
+      const n = alive.filter((a) => !a.sex).length;
+      if (!confirm(`Set ${n} animal${n === 1 ? "" : "s"} in ${m.name} to ${SEX[b.dataset.mobsex].toLowerCase()}? Animals with a sex already recorded are left as they are.`)) return;
+      try {
+        const r = await send("POST", `/api/mobs/${m.id}/animals/sex`, { sex: b.dataset.mobsex });
+        await ctx.refresh();
+        ctx.toast(`${r.updated} animal${r.updated === 1 ? "" : "s"} set to ${SEX[b.dataset.mobsex].toLowerCase()}`);
+      } catch (e) {
+        ctx.toast(e.message, { error: true });
+      }
+    };
+  });
   el.querySelectorAll("[data-animal]").forEach((tr) => {
     tr.onclick = () => ctx.selectAnimal(Number(tr.dataset.animal));
   });

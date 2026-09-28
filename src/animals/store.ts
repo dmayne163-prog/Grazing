@@ -168,6 +168,19 @@ export function updateAnimal(id: number, input: Record<string, unknown>): void {
   `).run(eid, txt("tag"), txt("nlis", 20), sex, txt("breed"), birth, txt("origin", 120), Date.now(), id);
 }
 
+/**
+ * Sets the sex of a mob's animals in one go — a heifer mob is all female.
+ * Only animals with no sex recorded are touched unless told otherwise, so a
+ * steer that was recorded one by one isn't overwritten.
+ */
+export function setSexForMob(mobId: number, sex: string, onlyMissing: boolean): { updated: number } {
+  if (!SEXES.includes(sex)) throw new StockError("Choose female, steer or bull");
+  const ids = animalsInMob(mobId).filter((a) => a.status === "alive" && (!onlyMissing || !a.sex)).map((a) => a.id);
+  const upd = db.prepare("UPDATE animals SET sex = ?, updated_at = ? WHERE id = ?");
+  db.transaction(() => { for (const id of ids) upd.run(sex, Date.now(), id); })();
+  return { updated: ids.length };
+}
+
 export function animalsInMob(mobId: number): AnimalSummary[] {
   const ids = db.prepare("SELECT DISTINCT animal_id FROM animal_events WHERE mob_id = ?").all(mobId) as Array<{ animal_id: number }>;
   return ids

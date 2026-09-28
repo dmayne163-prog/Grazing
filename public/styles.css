@@ -502,3 +502,12 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
    white. A CSS stroke overrides the SVG attribute Leaflet sets. */
 .light-base path.leaflet-interactive[stroke="#F2E8C9"]{stroke:#5B4630}
 .light-base .plabel{color:#1d1a16;text-shadow:0 0 3px #fff,0 0 6px #fff,0 1px 2px #fff}
+
+/* Sex, breed and age under an animal's tag. */
+.animalline{margin:0 0 2px;font-size:14px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+.chipbtn{
+  background:var(--surface-2);border:1px solid var(--line);border-radius:999px;
+  padding:3px 10px;font-size:12.5px;font-weight:600;color:var(--ink);
+}
+.chipbtn:hover{border-color:var(--accent)}
+.setsex{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 10px}
