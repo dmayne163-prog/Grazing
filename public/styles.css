@@ -225,6 +225,10 @@ button{cursor:pointer}
     width:40px;height:4px;border-radius:2px;background:var(--line);
   }
   .panel-body{padding-top:0}
+  /* Seven tabs don't fit across a phone; wrap them rather than let Layers and
+     Tools slide off the edge where nobody would think to look. */
+  .tabs{flex-wrap:wrap;row-gap:0}
+  .tabs button{padding:8px 7px 7px}
 }
 
 .panel h2{font:600 20px/1.2 var(--serif);margin:0 0 2px}
