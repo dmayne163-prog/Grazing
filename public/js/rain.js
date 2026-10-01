@@ -283,10 +283,12 @@ function tooltip(host, svg, W, bandX, text) {
     if (i === undefined) { tip.hidden = true; return; }
     tip.textContent = text(Number(i));
     tip.hidden = false;
-    const rect = host.getBoundingClientRect();
+    // Layout widths, not getBoundingClientRect: the panel may be zoomed, and
+    // style.left is in the panel's own (unzoomed) pixels.
+    const width = host.clientWidth;
     const half = tip.offsetWidth / 2;
-    const bx = bandX(Number(i)) * (rect.width / W);
-    tip.style.left = `${Math.min(rect.width - half, Math.max(half, bx))}px`;
+    const bx = bandX(Number(i)) * (width / W);
+    tip.style.left = `${Math.min(width - half, Math.max(half, bx))}px`;
   };
   svg.addEventListener("pointermove", show);
   svg.addEventListener("pointerdown", show);
@@ -299,7 +301,7 @@ function tooltip(host, svg, W, bandX, text) {
  */
 function drawMonthly(host, series) {
   if (!host) return;
-  const W = Math.max(280, host.clientWidth || 340), H = 160;
+  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(240, Math.max(160, W * 0.34)));
   const pad = { l: 30, r: 4, t: 16, b: 20 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
   const { step, top } = niceTop(Math.max(10, ...series.flatMap((s) => [s.gauge || 0, s.silo || 0, s.median || 0])));
@@ -349,7 +351,7 @@ function drawMonthly(host, series) {
  */
 function drawYearly(host, annual, medianYear) {
   if (!host || !annual.length) return;
-  const W = Math.max(280, host.clientWidth || 340), H = 150;
+  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(220, Math.max(150, W * 0.3)));
   const pad = { l: 34, r: 4, t: 14, b: 20 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
   const { step, top } = niceTop(Math.max(...annual.map((a) => a.mm)));

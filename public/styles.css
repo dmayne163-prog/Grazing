@@ -35,7 +35,8 @@
   --mono:ui-monospace,"Cascadia Mono","Consolas","SF Mono","Roboto Mono",monospace;
 
   --top-h:52px;
-  --panel-w:380px;
+  /* Wide on a desktop, but always leaving the map at least 45% of the screen. */
+  --panel-w:min(800px, 55vw);
 }
 
 *{box-sizing:border-box}
@@ -195,6 +196,11 @@ button{cursor:pointer}
   display:flex;flex-direction:column;
 }
 .grip{display:none}
+/* With the room a wide panel gives, everything in it is drawn larger. zoom
+   scales text, buttons and tables alike, which the px-based styles can't do
+   on their own. A phone (below 761px) keeps its own sizes. */
+@media (min-width:1200px){ .panel-body{zoom:1.15} }
+@media (min-width:1450px){ .panel-body{zoom:1.25} }
 .panel-body{flex:1;overflow:auto;padding:14px 16px 24px}
 
 @media (max-width:760px){
