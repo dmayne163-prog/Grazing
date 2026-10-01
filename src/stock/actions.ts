@@ -64,6 +64,37 @@ function mobAt(id: number, when: When): MobView {
 const clean = (v: unknown, max: number) =>
   typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
 
+/* --------------------------------- merge --------------------------------- */
+
+/**
+ * Merges a whole mob into another: its head goes to the other mob, and from
+ * then on they are one mob, where the other mob is. Recorded as a matching
+ * pair of transfers, the way AgriWebb's merges were brought in, so the history
+ * of both says where the cattle went and came from. The merged mob ends with
+ * no head and drops off the list; its record is kept.
+ */
+export function mergeMob(
+  fromId: number, intoId: number, when: When, note: string | null, username: string | null, batchId: string | null = null
+): { batch: string; head: number } {
+  if (fromId === intoId) throw new StockError("Choose a different mob to merge it into");
+  const from = mobAt(fromId, when);
+  const into = mobAt(intoId, when);
+  const n = from.state.head;
+  if (n < 1) throw new StockError("That mob has no head to merge");
+  const batch = batchId ?? randomUUID();
+  db.transaction(() => {
+    addEvent(fromId, {
+      date: when.date, time: when.time, kind: "transfer", head_change: -n,
+      data: { to_mob: intoId, merged: true, ...(note ? { note } : {}) },
+    }, "app", username, batch);
+    addEvent(intoId, {
+      date: when.date, time: when.time, kind: "transfer", head_change: n,
+      data: { from_mob: fromId, merged: true, ...(note ? { note } : {}) },
+    }, "app", username, batch);
+  })();
+  return { batch, head: n };
+}
+
 /* ---------------------------------- move --------------------------------- */
 
 /**

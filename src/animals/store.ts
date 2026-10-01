@@ -742,3 +742,18 @@ export function commitOptiweigh(rows: OptiweighRow[], opts: { mob_id: number | n
     return { batch, created, weighed, mob_weights: mobWeights, animals: byEid.size };
   })();
 }
+
+/**
+ * Every animal on hand in one mob moves to another on a date: a mob merged
+ * into another takes its animal records with it. Part of the caller's batch.
+ */
+export function moveAnimalsToMob(fromMob: number, toMob: number, date: string, username: string | null, batch: string): number {
+  let moved = 0;
+  for (const a of animalsInMob(fromMob)) {
+    if (a.status !== "alive") continue;
+    addAnimalEvent(a.id, { date, kind: "leave", mob_id: fromMob }, "app", username, batch);
+    addAnimalEvent(a.id, { date, kind: "join", mob_id: toMob }, "app", username, batch);
+    moved++;
+  }
+  return moved;
+}

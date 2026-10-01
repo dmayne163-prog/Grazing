@@ -323,6 +323,71 @@ function headDialog(ctx, m, { title, field, value, go, path, hint, done }) {
   $("#hN", d).select();
 }
 
+/* ---------------------------------- merge ---------------------------------- */
+
+/**
+ * Merges this whole mob into another. Mobs in the same paddocks are offered
+ * first; the result, and a warning where the owners differ, show before the
+ * button.
+ */
+function mergeDialog(ctx, m) {
+  const d = ctx.dialog;
+  const here = new Set(m.paddocks.map((p) => p.id));
+  const others = ctx.state.mobs.filter((x) => x.id !== m.id && x.head > 0);
+  const near = others.filter((x) => x.paddocks.some((p) => here.has(p.id)));
+  const rest = others.filter((x) => !near.includes(x)).sort((a, b) => a.name.localeCompare(b.name));
+  const opt = (x) => `<option value="${x.id}">${escapeHtml(x.name)} · ${x.head} hd${x.owner ? ` · ${escapeHtml(x.owner)}` : ""}</option>`;
+  d.innerHTML = `
+    <div class="dlg narrow">
+      <header><h2>Merge mobs</h2><div class="muted small">${escapeHtml(m.name)} · ${m.head} hd</div></header>
+      <div class="body">
+        <div class="f"><label for="mgInto">Merge all ${m.head} hd into</label>
+          <select id="mgInto">
+            ${near.length ? `<optgroup label="In the same paddock">${near.map(opt).join("")}</optgroup>` : ""}
+            ${rest.length ? `<optgroup label="Elsewhere">${rest.map(opt).join("")}</optgroup>` : ""}
+          </select>
+        </div>
+        <p class="small" id="mgSays"></p>
+        ${whenHtml("mg")}
+        <div class="f"><label for="mgNote">Note</label><input id="mgNote" placeholder="optional" autocomplete="off"></div>
+        <p class="muted tiny">The merged cattle go wherever the other mob is, and take any individual animal records with them. ${escapeHtml(m.name)} ends with no head and drops off the list; its history is kept.</p>
+      </div>
+      <footer><button class="btn" id="mgCancel">Cancel</button><button class="btn primary" id="mgGo">Merge</button></footer>
+    </div>`;
+  bindWhen(d, "mg");
+  const sel = $("#mgInto", d);
+  const says = () => {
+    const into = others.find((x) => x.id === Number(sel.value));
+    if (!into) { $("#mgSays", d).textContent = ""; return; }
+    const owners = m.owner !== into.owner
+      ? ` <span class="bad">Careful: ${m.owner ? `this mob is ${escapeHtml(m.owner)}'s` : "this mob is your own"} and ${into.owner ? `that one is ${escapeHtml(into.owner)}'s` : "that one is your own"}.</span>`
+      : "";
+    const where = into.paddocks.map((p) => escapeHtml(p.name)).join(" + ") || "no paddock";
+    $("#mgSays", d).innerHTML = `<b>${escapeHtml(into.name)}</b> becomes ${into.head} + ${m.head} = <b>${into.head + m.head} hd</b>, in ${where}.${owners}`;
+  };
+  sel.onchange = says;
+  says();
+  $("#mgCancel", d).onclick = () => d.close();
+  $("#mgGo", d).onclick = async () => {
+    const btn = $("#mgGo", d);
+    const into = others.find((x) => x.id === Number(sel.value));
+    if (!into) return;
+    try {
+      btn.disabled = true;
+      const r = await send("POST", `/api/mobs/${m.id}/merge`, { into: into.id, note: $("#mgNote", d).value, ...readWhen(d, "mg") });
+      d.close();
+      ctx.selectMob(into.id);
+      await ctx.refresh();
+      undoable(ctx, `Merged ${r.head} hd into ${into.name}${r.animals ? ` (${r.animals} animal records moved)` : ""}`, r.batch);
+    } catch (e) {
+      btn.disabled = false;
+      showError(d, e.message);
+    }
+  };
+  if (!others.length) { $("#mgGo", d).disabled = true; $("#mgSays", d).textContent = "There's no other mob on hand to merge into."; }
+  d.showModal();
+}
+
 /* --------------------------------- mob page -------------------------------- */
 
 export function mobPageHtml(ctx, m) {
@@ -354,6 +419,7 @@ export function mobPageHtml(ctx, m) {
         <button class="btn" id="mWeigh">Record weight…</button>
         <button class="btn" id="mDeaths">Deaths…</button>
         <button class="btn" id="mRecount">Recount…</button>
+        <button class="btn" id="mMerge">Merge into another mob…</button>
       </div>
       <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
     </div>
@@ -409,6 +475,7 @@ export function bindMobPage(ctx, m, root) {
     hint: "The mob's head from this moment on. For a death or sale, record that instead, so the history says why the number changed.",
     done: (n) => `${m.name} counted at ${n} hd`,
   }));
+  $("#mMerge", root)?.addEventListener("click", () => mergeDialog(ctx, m));
   const save = $("#mSave", root);
   if (save) save.onclick = async () => {
     try {
@@ -434,6 +501,7 @@ const EVENT_TEXT = {
   move: (e) => e.reason === "gate opened" ? `${e.gate_name || "Gate"} opened`
     : e.reason === "gate closed" ? `${e.gate_name || "Gate"} closed` : "Moved",
   transfer: (e) => e.off_farm ? `Transferred off farm · ${Math.abs(e.head_change)} hd`
+    : e.merged && e.head_change < 0 ? `Merged ${-e.head_change} hd into ${e.to_mob || "another mob"}`
     : e.head_change < 0 ? `Drafted ${-e.head_change} hd${e.to_mob ? ` to ${e.to_mob}` : ""}${e.to_paddock ? ` (${e.to_paddock})` : ""}`
     : `Merged in ${e.head_change} hd${e.from_mob ? ` from ${e.from_mob}` : ""}`,
   sale: (e) => `Sold ${-e.head_change} hd`,

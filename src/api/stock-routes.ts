@@ -12,14 +12,14 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
-  deleteAppEvent, draftMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
+  deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
   type DraftInput, type GateInput, type WeighInput,
 } from "../stock/actions.js";
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
 import { getFeature } from "../map/store.js";
 import { parseSession, type ParsedSession } from "../animals/session.js";
 import {
-  commitOptiweigh, commitSession, isOptiweigh, parseOptiweigh, planOptiweigh, planSession, type OptiweighRow,
+  commitOptiweigh, commitSession, isOptiweigh, moveAnimalsToMob, parseOptiweigh, planOptiweigh, planSession, type OptiweighRow,
 } from "../animals/store.js";
 import {
   commitHistory, historyAlreadyImported, planHistory, replayMovements,
@@ -165,6 +165,23 @@ stockApi.post("/mobs/:id/weigh", requireAdmin, (req, res) => {
   });
 });
 
+/** Merges this mob into another, animal records and all, as one undoable action. */
+stockApi.post("/mobs/:id/merge", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  act(res, () => {
+    const from = Number(req.params["id"]), into = Number(b["into"]);
+    const when = parseWhen(b["date"], b["time"]);
+    const note = typeof b["note"] === "string" && b["note"].trim() ? b["note"].trim().slice(0, 500) : null;
+    const r = db.transaction(() => {
+      const m = mergeMob(from, into, when, note, who(req));
+      const animals = moveAnimalsToMob(from, into, when.date, who(req), m.batch);
+      return { ...m, animals };
+    })();
+    logAction(req, `merged mob #${from} (${r.head} hd) into mob #${into}`);
+    return r;
+  });
+});
+
 stockApi.post("/mobs/:id/deaths", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as Record<string, unknown>;
   act(res, () => {
@@ -300,6 +317,7 @@ stockApi.get("/mobs/:id/events", (req, res) => {
       from_mob: typeof data["from_mob"] === "number" ? mobName.get(data["from_mob"]) ?? null : null,
       to_paddock: data["to_paddock"] ?? null,
       off_farm: data["off_farm"] === true,
+      merged: data["merged"] === true,
       note: data["note"] ?? null,
       source: e.source,
     };
