@@ -160,7 +160,11 @@ export interface GateInput {
   paddocks?: unknown;
   /** For closing: which paddock each mob with access to both ends up in. */
   sides?: unknown;
+  /** For closing: the side every mob not named in sides ends up on. */
+  home?: unknown;
   note?: unknown;
+  /** Worked out from the pasture readings after the fact, not recorded at the time. */
+  inferred?: boolean;
 }
 
 /**
@@ -169,7 +173,7 @@ export interface GateInput {
  * show "these three mobs will be able to reach No.8" before the button.
  */
 export function setGate(
-  gateId: number, input: GateInput, when: When, username: string | null, dryRun = false
+  gateId: number, input: GateInput, when: When, username: string | null, dryRun = false, batchId: string | null = null
 ): { batch: string | null; paddocks: number[]; changes: GateChange[] } {
   const gate = getFeature(gateId);
   if (!gate || gate.deleted_at !== null || !isGate(gate)) throw new StockError("That is not a gate");
@@ -199,7 +203,7 @@ export function setGate(
       next = [...set, hasA ? b : a];
     } else if (state === "closed" && hasA && hasB) {
       // Which side they end up on: as told, else wherever their head is counted.
-      const told = Number(sides[String(v.mob.id)]);
+      const told = Number(sides[String(v.mob.id)] ?? input.home);
       const home = told === a || told === b ? told : set[0] === b ? b : a;
       const other = home === a ? b : a;
       next = set.filter((p) => p !== other);
@@ -209,17 +213,18 @@ export function setGate(
   }
   if (dryRun) return { batch: null, paddocks: pair, changes };
 
-  const note = clean(input.note, 300);
-  const batch = randomUUID();
+  const inferred = input.inferred === true;
+  const note = clean(input.note, 300) ?? (inferred ? "Inferred from the pasture readings: likely, not recorded at the time" : null);
+  const batch = batchId ?? randomUUID();
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO gate_events (gate_id, paddock_a, paddock_b, state, date, time, note, batch, username, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(gateId, a, b, state, when.date, when.time, note, batch, username, Date.now());
+      INSERT INTO gate_events (gate_id, paddock_a, paddock_b, state, date, time, note, batch, username, created_at, inferred)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(gateId, a, b, state, when.date, when.time, note, batch, username, Date.now(), inferred ? 1 : 0);
     for (const c of changes) {
       addEvent(c.mob_id, {
         date: when.date, time: when.time, kind: "move", paddock_ids: c.to,
-        data: { gate: gateId, gate_name: gate.name, reason: state === "open" ? "gate opened" : "gate closed" },
+        data: { gate: gateId, gate_name: gate.name, reason: state === "open" ? "gate opened" : "gate closed", ...(inferred ? { inferred: true } : {}) },
       }, "app", username, batch);
     }
   })();

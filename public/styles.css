@@ -557,3 +557,12 @@ table.outlook td,table.outlook th{padding:5px 6px}
 .residual input{width:90px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;color:var(--ink)}
 .sw-outlook{width:12px;height:10px;background:rgba(25,158,112,.3);border-radius:2px}
 .legend [hidden]{display:none}
+
+/* Inferred, not recorded: gate openings worked out from the pasture readings. */
+.chip.inferred{background:transparent;border:1px dashed var(--warn);color:var(--warn)}
+.timeline li.graze.inferred{border-left-style:dashed}
+ul.gatefind{list-style:none;margin:12px 0 0;padding:0}
+ul.gatefind li{padding:10px 0;border-top:1px solid var(--line-soft)}
+ul.gatefind .pick{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+ul.gatefind .pick input{margin-top:4px}
+.chip.strongchip{background:var(--good-bg);color:var(--good)}

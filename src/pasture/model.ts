@@ -554,3 +554,171 @@ export function diagnose() {
   });
   return { fit: { ...fit, multipliers: undefined }, rows };
 }
+
+/* ---------------------------- open-gate finder ---------------------------- */
+
+export interface GateCandidate {
+  gate_id: number;
+  gate_name: string;
+  stocked: number;      // paddock with stock recorded in it
+  other: number;        // the paddock on the far side of the gate, with none recorded
+  from: string;         // first day of the stretch
+  to: string;           // the day the stocked paddock emptied (exclusive)
+  confidence: "strong" | "likely";
+  /** How much better "gate open" explains both paddocks' readings than "gate shut", %. */
+  improvement: number;
+  /** In the empty paddock over the stretch, kg/ha: what was measured, and what the model expects if rested and if shared. */
+  other_change: { measured: number; if_rested: number; if_open: number };
+  /** How the paddocks that really were rested over the same weeks did against the model, kg/ha: the season's own drift. */
+  rested_drift: number;
+  /** Feed gone from the empty side beyond resting, after allowing for the season's drift, kg/ha. */
+  excess: number;
+  /** Set when debugging: why a stretch wasn't suggested. */
+  rejected?: string;
+  ae: number;           // stock in the stocked paddock over the stretch, AE
+}
+
+/**
+ * Gates that were probably open but never recorded as such — AgriWebb's
+ * exports don't carry gates at all. For every stretch where a gate had stock
+ * recorded on one side and none on the other, both explanations are run
+ * through the fitted model from the readings at the start of the stretch:
+ *
+ *   shut  all the grazing falls on the stocked side; the other side rests
+ *   open  the grazing is shared across both sides by area
+ *
+ * and compared with what PastureKey then measured on both sides. Where "open"
+ * fits clearly better and the empty side lost feed it shouldn't have, the gate
+ * is suggested. These are inferences: shown and recorded as such.
+ */
+export function findOpenGates(
+  gates: Array<{ id: number; name: string; a: number; b: number }>,
+  before: string,
+  wasOpen: (gateId: number, date: string) => boolean,
+  showRejected = false,
+): GateCandidate[] {
+  const loaded = loadInputs();
+  if (!loaded) return [];
+  const inp: Inputs = loaded;
+  const fit = calibrate(inp);
+  if (!fit) return [];
+  const params = fit.params;
+  const drives = new Map<string, Drive>();
+  for (const [cell, w] of inp.weather) drives.set(cell, driver(w, 0, inp.end - inp.start + 1, WMAX * 0.3));
+  const byId = new Map(inp.paddocks.map((p) => [p.id, p]));
+  const limit = Math.min(inp.end + 1, dayNo(before));
+  const MIN_DAYS = 10;
+  const out: GateCandidate[] = [];
+
+
+  /** Runs one paddock from a reading to the later readings, with the stock given over [s, e). */
+  function run(p: Paddock, o: Obs, s: number, e: number, aeOn: (d: number) => number, upTo: Obs[]) {
+    const dr = drives.get(p.cell)!, m = fit!.multipliers.get(p.id) ?? 1;
+    const st = startState(o.tsdm, o.green);
+    const at = new Map<number, number>();
+    const lastDay = upTo[upTo.length - 1]!.day;
+    for (let d = o.day; d < lastDay; d++) {
+      step(st, params, m, dr.D[d - inp.start]!, dr.WI[d - inp.start]!, dr.R[d - inp.start]!, d >= s && d < e ? aeOn(d) : p.ae[d - inp.start]!);
+      at.set(d + 1, st[0]! + st[1]!);
+    }
+    return upTo.map((x) => ({ x, pred: at.get(x.day) ?? o.tsdm }));
+  }
+  const startObs = (p: Paddock, s: number) => [...p.obs].reverse().find((o) => o.day <= s + 2 && o.day >= s - 10) ?? null;
+  const later = (p: Paddock, from: number, e: number) => p.obs.filter((o) => o.day > from && o.day <= e + 3);
+
+  /**
+   * The season's own drift: over the same weeks, how far the paddocks that
+   * really had no stock fell short of (or beat) what the model expected of
+   * them resting. Autumn haying-off, say, takes feed off rested paddocks too,
+   * and that mustn't read as grazing.
+   */
+  const driftCache = new Map<string, number>();
+  function drift(s: number, e: number): number {
+    const key = `${s}|${e}`;
+    if (driftCache.has(key)) return driftCache.get(key)!;
+    const shortfalls: number[] = [];
+    for (const p of inp.paddocks) {
+      let empty = true;
+      for (let d = s; d < e && empty; d++) if (p.ae[d - inp.start]! > 0) empty = false;
+      if (!empty) continue;
+      const o = startObs(p, s);
+      const l = o ? later(p, o.day, e) : [];
+      if (!o || !l.length) continue;
+      const r = run(p, o, s, e, () => 0, l);
+      const last = r[r.length - 1]!;
+      shortfalls.push(last.pred - last.x.tsdm);
+    }
+    const v = shortfalls.length >= 3 ? pct(shortfalls, 0.5) : 0;
+    driftCache.set(key, v);
+    return v;
+  }
+
+  function test(pa: Paddock, pb: Paddock, s: number, e: number): Omit<GateCandidate, "gate_id" | "gate_name" | "stocked" | "other" | "from" | "to"> {
+    const oa = startObs(pa, s), ob = startObs(pb, s);
+    const none = (why: string) => ({
+      confidence: "likely" as const, improvement: 0, other_change: { measured: 0, if_rested: 0, if_open: 0 },
+      rested_drift: 0, excess: 0, ae: 0, rejected: why,
+    });
+    if (!oa || !ob) return none("no reading near the start");
+    const la = later(pa, oa.day, e), lb = later(pb, ob.day, e);
+    if (lb.length < 2 || !la.length) return none("too few readings during the stretch");
+    const totalAe = (d: number) => pa.ae[d - inp.start]! * pa.area;
+    const shared = (d: number) => totalAe(d) / (pa.area + pb.area);
+
+    const sse = (rows: Array<{ x: Obs; pred: number }>) => rows.reduce((t, r) => t + r.x.w * (r.pred - r.x.tsdm) ** 2, 0);
+    const shutA = run(pa, oa, s, e, (d) => pa.ae[d - inp.start]!, la), shutB = run(pb, ob, s, e, () => 0, lb);
+    const openA = run(pa, oa, s, e, shared, la), openB = run(pb, ob, s, e, shared, lb);
+    const sse0 = sse(shutA) + sse(shutB), sse1 = sse(openA) + sse(openB);
+    const improvement = sse0 > 0 ? (sse0 - sse1) / sse0 : 0;
+    const stockedSideAgrees = sse(openA) <= sse(shutA);
+
+    const last = lb[lb.length - 1]!;
+    const measured = last.tsdm - ob.tsdm;
+    const ifRested = shutB[shutB.length - 1]!.pred - ob.tsdm;
+    const ifOpen = openB[openB.length - 1]!.pred - ob.tsdm;
+    const restedDrift = drift(s, e);
+    // Gone from the empty side beyond what resting explains, beyond the season's drift.
+    const excess = ifRested - measured - restedDrift;
+    // What sharing the stock would have taken from it.
+    const expected = ifRested - ifOpen;
+
+    let aeSum = 0;
+    for (let d = s; d < e; d++) aeSum += totalAe(d);
+    const base = {
+      improvement: Math.round(improvement * 100),
+      other_change: { measured: Math.round(measured), if_rested: Math.round(ifRested), if_open: Math.round(ifOpen) },
+      rested_drift: Math.round(restedDrift), excess: Math.round(excess), ae: Math.round(aeSum / (e - s)),
+    };
+    let confidence: "strong" | "likely" | null = null;
+    if (stockedSideAgrees && improvement > 0.5 && excess > 150 && excess > 0.5 * expected) confidence = "strong";
+    else if (stockedSideAgrees && improvement > 0.25 && excess > 80 && excess > 0.3 * expected) confidence = "likely";
+    if (!confidence) {
+      const why = !stockedSideAgrees ? "the stocked side fits better with the gate shut"
+        : excess <= 80 ? "the empty side lost no more than the rested paddocks did"
+        : "the readings don't favour the gate being open enough";
+      return { ...base, confidence: "likely" as const, rejected: why };
+    }
+    return { ...base, confidence };
+  }
+
+  for (const g of gates) {
+    for (const [A, B] of [[g.a, g.b], [g.b, g.a]] as const) {
+      const pa = byId.get(A), pb = byId.get(B);
+      if (!pa || !pb || pa.obs.length < 3 || pb.obs.length < 3) continue;
+      // Stretches with stock in A and none in B.
+      let t = Math.max(inp.start, Math.min(pa.obs[0]!.day, pb.obs[0]!.day));
+      while (t < limit) {
+        const i = t - inp.start;
+        if (!(pa.ae[i]! > 0 && pb.ae[i]! === 0)) { t++; continue; }
+        let e = t;
+        while (e < limit && pa.ae[e - inp.start]! > 0 && pb.ae[e - inp.start]! === 0) e++;
+        const s0 = t;
+        t = e;
+        if (e - s0 < MIN_DAYS || wasOpen(g.id, isoOf(s0 + Math.floor((e - s0) / 2)))) continue;
+        const c = test(pa, pb, s0, e);
+        if (c && (!c.rejected || showRejected)) out.push({ gate_id: g.id, gate_name: g.name, stocked: A, other: B, from: isoOf(s0), to: isoOf(e), ...c });
+      }
+    }
+  }
+  return out.sort((x, y) => (x.from < y.from ? -1 : 1));
+}

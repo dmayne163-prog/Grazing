@@ -347,6 +347,8 @@ export interface Segment {
   to: string | null;
   head: number;
   paddock_ids: number[];
+  /** The mob's reach to more than one paddock here comes from an inferred gate opening. */
+  inferred: boolean;
 }
 
 /**
@@ -366,6 +368,7 @@ export function allSegments(): Segment[] {
     let head = 0;
     let started = false;
     let paddocks: number[] = [];
+    let inferred = false;
     let open: Segment | null = null;
     while (i < rows.length && rows[i]!.mob_id === mobId) {
       const date = rows[i]!.date;
@@ -376,13 +379,14 @@ export function allSegments(): Segment[] {
         if (e.head_change !== null) head += e.head_change;
         if (e.paddock_ids !== null && (e.kind === "opening" || e.kind === "move")) {
           paddocks = JSON.parse(e.paddock_ids) as number[];
+          inferred = paddocks.length > 1 && (JSON.parse(e.data) as Record<string, unknown>)["inferred"] === true;
         }
         i++;
       }
-      const same = open && open.head === head && open.paddock_ids.join(",") === paddocks.join(",");
+      const same = open && open.head === head && open.paddock_ids.join(",") === paddocks.join(",") && open.inferred === inferred;
       if (same) continue;
       if (open) { open.to = date; out.push(open); open = null; }
-      if (head > 0 && paddocks.length) open = { mob_id: mobId, from: date, to: null, head, paddock_ids: paddocks };
+      if (head > 0 && paddocks.length) open = { mob_id: mobId, from: date, to: null, head, paddock_ids: paddocks, inferred };
     }
     if (open) out.push(open);
   }
@@ -405,6 +409,8 @@ export interface GrazingPeriod {
   head_days: number;
   /** Other paddocks the mob could reach at the same time (gates open). */
   shared_with: number[];
+  /** Some of that reach comes from a gate inferred to have been open, not recorded. */
+  inferred: boolean;
 }
 
 export interface PaddockHistory {
@@ -440,12 +446,14 @@ export function paddockHistories(): Map<number, PaddockHistory> {
         prev.head_end = s.head;
         prev.head_days += s.head * days;
         prev.shared_with = [...new Set([...prev.shared_with, ...s.paddock_ids.filter((p) => p !== pid)])];
+        prev.inferred ||= s.inferred;
       } else {
         const m = mobs.get(s.mob_id);
         list.push({
           mob_id: s.mob_id, mob_name: m?.name ?? `#${s.mob_id}`, owner: m?.owner ?? null,
           from: s.from, to: s.to, days, head_start: s.head, head_end: s.head, head_days: s.head * days,
           shared_with: s.paddock_ids.filter((p) => p !== pid),
+          inferred: s.inferred,
         });
       }
       byPaddock.set(pid, list);

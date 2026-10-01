@@ -5,6 +5,7 @@ import { openImport } from "./importer.js";
 import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
 import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
+import { openGateFinder } from "./gatefinder.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -573,6 +574,7 @@ function toolsHtml() {
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
         <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>PastureKey paddock readings, or the farm Pasture Biomass report (.zip)</span></button>
+        <button class="btn" id="findGates"><b>Find gates that were probably left open…</b><span>From the pasture readings, for the time before this app (AgriWebb kept no gate records)</span></button>
       </div>
     ` : ""}
 
@@ -651,6 +653,18 @@ function bindOverview() {
 
   body.querySelectorAll("[data-import]").forEach((b) => {
     b.onclick = () => startImport(b.dataset.import);
+  });
+
+  const fg = $("#findGates", body);
+  if (fg) fg.onclick = () => openGateFinder($("#dialog"), {
+    toast,
+    done: async (message, batch) => {
+      await ctx.refresh();
+      toast(message, batch ? { action: { label: "Undo", run: async () => {
+        try { await send("POST", `/api/undo/${batch}`); await ctx.refresh(); toast("Undone"); }
+        catch (e) { toast(e.message, { error: true }); }
+      } } } : {});
+    },
   });
 
   const off = $("#offlineBtn", body);
@@ -1276,9 +1290,9 @@ async function loadGrazing(f) {
       <dt>Last 12 months</dt><dd>${h.grazing_days_365} grazing days · ${nf0.format(h.head_days_365)} head-days${area ? ` (${nf0.format(h.head_days_365 / area)} per ha)` : ""}</dd>
     </dl>
     <ul class="timeline">${items.map(({ p, r }) => p ? `
-      <li class="graze">
+      <li class="graze${p.inferred ? " inferred" : ""}">
         <div class="when">${span(p.from, p.to)}<span class="muted"> · ${p.days} d</span></div>
-        <div><button class="linkbtn" data-mob="${p.mob_id}">${escapeHtml(p.mob_name)}</button>${p.owner ? ` <span class="chip owner">${escapeHtml(p.owner)}</span>` : ""}</div>
+        <div><button class="linkbtn" data-mob="${p.mob_id}">${escapeHtml(p.mob_name)}</button>${p.owner ? ` <span class="chip owner">${escapeHtml(p.owner)}</span>` : ""}${p.inferred ? ' <span class="chip inferred" title="Through a gate inferred from the pasture readings to have been open: likely, not recorded at the time">inferred gate</span>' : ""}</div>
         <div class="muted tiny">${p.head_start === p.head_end ? `${p.head_start} hd` : `${p.head_start} → ${p.head_end} hd`} · ${nf0.format(p.head_days)} head-days${p.shared_with.length ? ` · gates open to ${escapeHtml(p.shared_with.join(", "))}` : ""}</div>
       </li>` : `
       <li class="rest"><span class="muted">${r.from === data.records_begin && r.to

@@ -562,7 +562,7 @@ export async function loadGatePanel(ctx, f, root) {
       <h3>Gate history</h3>
       <ul class="history">${g.history.map((e, i) => `
         <li><span class="when">${day(e.date)}${e.time ? `<br><span class="muted tiny">${escapeHtml(e.time)}</span>` : ""}</span>
-        <span class="grow">${e.state === "open" ? "Opened" : "Closed"}${e.note ? `<br><span class="muted tiny">${escapeHtml(e.note)}</span>` : ""}</span>
+        <span class="grow">${e.state === "open" ? "Opened" : "Closed"}${e.inferred ? ' <span class="chip inferred" title="Worked out from the pasture readings after the fact: likely, not recorded at the time">inferred</span>' : ""}${e.note ? `<br><span class="muted tiny">${escapeHtml(e.note)}</span>` : ""}</span>
         ${ctx.canEdit && i === 0 ? `<button class="linkbtn danger-link" data-undo="${e.batch}">Undo</button>` : ""}</li>`).join("")}
       </ul>` : ""}`;
 

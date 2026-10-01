@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db, setSetting } from "../db/database.js";
-import { residual, type Outlook } from "../pasture/model.js";
+import { residual, type GateCandidate, type Outlook } from "../pasture/model.js";
+import { allSegments, today } from "../stock/store.js";
+import { parseWhen, setGate, StockError } from "../stock/actions.js";
 import { Worker } from "node:worker_threads";
 import { logger } from "../logger.js";
 import {
@@ -73,16 +75,90 @@ setTimeout(() => { outlook().catch(() => { /* logged */ }); }, 60_000).unref();
 setInterval(() => { outlook().catch(() => { /* logged */ }); }, 3_600_000).unref();
 
 function inWorker(): Promise<Outlook | null> {
+  return runJob<Outlook | null>({ job: "outlook" });
+}
+
+/** Runs one of the model's slow jobs in a worker thread (see outlook-worker.ts). */
+function runJob<T>(message: { job: "outlook" } | { job: "gates"; before: string }): Promise<T> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("../pasture/outlook-worker.js", import.meta.url));
-    w.once("message", (m: { ok: boolean; outlook?: Outlook | null; error?: string }) => {
+    w.once("message", (m: { ok: boolean; result?: T; error?: string }) => {
       void w.terminate();
-      if (m.ok) resolve(m.outlook ?? null); else reject(new Error(m.error));
+      if (m.ok) resolve(m.result as T); else reject(new Error(m.error));
     });
     w.once("error", reject);
-    w.postMessage("go");
+    w.postMessage(message);
   });
 }
+
+/* ----------------------- gates probably left open ------------------------ */
+
+/**
+ * The day the app started keeping its own records. Before it, gate openings
+ * were never recorded (AgriWebb's exports don't carry them), so that's the
+ * stretch the finder searches; after it, what's recorded is what happened.
+ */
+function appStart(): string {
+  const r = db.prepare("SELECT MIN(created_at) AS t FROM mob_events WHERE source = 'app'").get() as { t: number | null };
+  return r.t ? new Date(r.t).toISOString().slice(0, 10) : today();
+}
+
+pastureApi.get("/pasture/gate-suggestions", requireAdmin, async (_req, res) => {
+  const before = appStart();
+  let found: GateCandidate[];
+  try {
+    found = await runJob<GateCandidate[]>({ job: "gates", before });
+  } catch (e) {
+    log.error("finding open gates failed", e);
+    res.status(500).json({ error: "The gates couldn't be checked" });
+    return;
+  }
+  const names = new Map((db.prepare("SELECT id, name FROM features").all() as Array<{ id: number; name: string }>).map((r) => [r.id, r.name]));
+  const mobNames = new Map((db.prepare("SELECT id, name FROM mobs").all() as Array<{ id: number; name: string }>).map((r) => [r.id, r.name]));
+  const segs = allSegments();
+  res.json({
+    before,
+    suggestions: found.map((c) => ({
+      ...c,
+      stocked_name: names.get(c.stocked) ?? `#${c.stocked}`,
+      other_name: names.get(c.other) ?? `#${c.other}`,
+      // Who was in the stocked paddock over the stretch.
+      mobs: [...new Set(segs.filter((s) => s.paddock_ids.includes(c.stocked) && s.from < c.to && (s.to === null || s.to > c.from))
+        .map((s) => mobNames.get(s.mob_id) ?? `#${s.mob_id}`))],
+    })),
+  });
+});
+
+/**
+ * Records the chosen suggestions: each gate opened the evening the stretch
+ * began and closed at the start of the day it ended, marked as inferred.
+ * All in one batch, so one Undo takes the lot back out.
+ */
+pastureApi.post("/pasture/inferred-gates", requireAdmin, (req, res) => {
+  const items = Array.isArray((req.body ?? {})["items"]) ? (req.body["items"] as Array<Record<string, unknown>>) : [];
+  if (!items.length) { res.status(400).json({ error: "Nothing chosen" }); return; }
+  const who = req.user?.username ?? null;
+  const batch = randomUUID();
+  const done: number[] = [];
+  const skipped: Array<{ index: number; reason: string }> = [];
+  items.forEach((it, index) => {
+    const gate = Number(it["gate_id"]), home = Number(it["stocked"]);
+    const from = String(it["from"] ?? ""), to = String(it["to"] ?? "");
+    try {
+      db.transaction(() => {
+        setGate(gate, { state: "open", inferred: true }, parseWhen(from, "23:59"), who, false, batch);
+        if (to <= today()) setGate(gate, { state: "closed", home, inferred: true }, parseWhen(to, "00:00"), who, false, batch);
+      })();
+      done.push(index);
+    } catch (e) {
+      skipped.push({ index, reason: e instanceof StockError ? e.message : "couldn't be recorded" });
+    }
+  });
+  const msg = `${who} recorded ${done.length} gate opening${done.length === 1 ? "" : "s"} inferred from the pasture readings`;
+  log.info(msg);
+  addEvent({ ts: Date.now(), source: "pasture", kind: "action", severity: "info", message: msg, value: null });
+  res.json({ ok: true, batch: done.length ? batch : null, recorded: done.length, skipped });
+});
 
 /** The outlook for every paddock and the property, without the day-by-day bands. */
 pastureApi.get("/pasture/outlook", async (_req, res) => {

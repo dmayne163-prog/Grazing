@@ -366,6 +366,10 @@ CREATE TABLE IF NOT EXISTS settings (
     if (!pastureCols.includes(col)) db.exec(`ALTER TABLE pasture_obs ADD COLUMN ${col} ${type}`);
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_pasture_feature ON pasture_obs(feature_id, date)");
+  // A gate opening worked out after the fact from the pasture readings, not
+  // recorded at the time: likely, but inferred, and shown as such.
+  const gateCols = (db.pragma("table_info(gate_events)") as Array<{ name: string }>).map((c) => c.name);
+  if (!gateCols.includes("inferred")) db.exec("ALTER TABLE gate_events ADD COLUMN inferred INTEGER NOT NULL DEFAULT 0");
 }
 
 /* --------------------------------- events -------------------------------- */
