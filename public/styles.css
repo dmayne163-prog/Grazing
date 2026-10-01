@@ -218,7 +218,9 @@ button{cursor:pointer}
     transition:height .2s ease;
     padding-bottom:env(safe-area-inset-bottom);
   }
-  /* Set on .app so the map buttons and toast move with the sheet. */
+  /* Set on .app so the map buttons and toast move with the sheet. Closed, the
+     sheet is just its handle bar, leaving the map the whole screen. */
+  .app{--sheet-h:calc(43px + env(safe-area-inset-bottom))}
   .app.sheet-open{--sheet-h:72%}
   /* A full-width bar with a label, so it's obvious where to tap to bring
      the menu up — a thin grey line on its own wasn't. */
@@ -522,3 +524,13 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 }
 .chipbtn:hover{border-color:var(--accent)}
 .setsex{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 10px}
+
+/* Rain chart legend. Swatch colours match the validated series colours in rain.js. */
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink-2);margin:2px 0 6px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px}
+.sw-gauge{background:#3E9AC9}
+.sw-silo{background:#d95926;border-radius:50%}
+.sw-median{width:14px;height:2px;border-radius:1px;background:#75848B}
+.decile{font-weight:650}
+.decile.d1,.decile.d2,.decile.d3{color:var(--warn)}

@@ -274,6 +274,30 @@ CREATE TABLE IF NOT EXISTS rain_readings (
 );
 CREATE INDEX IF NOT EXISTS idx_rain_date ON rain_readings(date);
 
+-- SILO's gridded daily climate (0.05°, about 5 km) for each grid point that
+-- has a paddock in it. Kept apart from rain_readings on purpose: SILO is an
+-- estimate interpolated from BOM stations, the gauges are what fell here.
+CREATE TABLE IF NOT EXISTS climate_cells (
+  cell        TEXT PRIMARY KEY,        -- "lat,lon" to two decimals
+  lat         REAL NOT NULL,
+  lon         REAL NOT NULL,
+  elevation_m REAL,
+  first_date  TEXT,
+  last_date   TEXT,
+  fetched_at  INTEGER,
+  error       TEXT
+);
+CREATE TABLE IF NOT EXISTS climate_daily (
+  cell  TEXT NOT NULL,
+  date  TEXT NOT NULL,
+  rain  REAL,     -- mm, the 24 h to 9 am on this date
+  tmax  REAL,     -- °C
+  tmin  REAL,     -- °C
+  evap  REAL,     -- class A pan, mm
+  et0   REAL,     -- FAO56 short-crop reference evapotranspiration, mm
+  PRIMARY KEY (cell, date)
+) WITHOUT ROWID;
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

@@ -8,6 +8,8 @@ import { mapApi } from "./api/map-routes.js";
 import { stockApi } from "./api/stock-routes.js";
 import { rainApi } from "./api/rain-routes.js";
 import { animalApi } from "./api/animal-routes.js";
+import { climateApi } from "./api/climate-routes.js";
+import { startClimateSync } from "./climate/silo.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -61,6 +63,7 @@ app.use("/api/auth", auth);
 app.use("/api", stockApi);
 app.use("/api", rainApi);
 app.use("/api", animalApi);
+app.use("/api", climateApi);
 app.use("/api", mapApi);
 
 app.use("/tiles", requireAuth, tiles);
@@ -102,6 +105,7 @@ const server = createServer(app);
 void initAccess();
 const rateLimitSweeper = startRateLimitSweeper();
 const backupTimer = startBackups();
+const climateTimer = startClimateSync();
 
 const housekeeping = setInterval(() => {
   const gone = deleteExpiredSessions();
@@ -135,6 +139,7 @@ function shutdown(signal: string) {
   clearInterval(housekeeping);
   clearInterval(rateLimitSweeper);
   clearInterval(backupTimer);
+  clearInterval(climateTimer);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3_000).unref();
 }

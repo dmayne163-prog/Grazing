@@ -106,5 +106,13 @@ export const config = {
   /** How long a session lasts, refreshed each time it is used. */
   sessionDays: num("SESSION_DAYS", 60),
 
+  /**
+   * SILO (Queensland Government climate data). Its API takes an email address
+   * as the username; with none set the app simply doesn't fetch SILO data.
+   */
+  siloEmail: str("SILO_EMAIL", ""),
+  /** Local hour after which the day's SILO top-up runs; SILO updates overnight. */
+  siloHour: num("SILO_HOUR", 7),
+
   logLevel: str("LOG_LEVEL", "info"),
 };
