@@ -542,3 +542,6 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .sw-median{width:14px;height:2px;border-radius:1px;background:#75848B}
 .decile{font-weight:650}
 .decile.d1,.decile.d2,.decile.d3{color:var(--warn)}
+.sw-pasture{width:14px;height:2px;border-radius:1px;background:#199e70}
+.sw-pasture-band{width:12px;height:10px;background:rgba(25,158,112,.22);border-radius:2px}
+.sw-ref{width:14px;height:0;border-top:2px dashed #A3B1B7;border-radius:0}

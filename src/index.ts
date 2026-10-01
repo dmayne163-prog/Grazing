@@ -9,6 +9,7 @@ import { stockApi } from "./api/stock-routes.js";
 import { rainApi } from "./api/rain-routes.js";
 import { animalApi } from "./api/animal-routes.js";
 import { climateApi } from "./api/climate-routes.js";
+import { pastureApi } from "./api/pasture-routes.js";
 import { startClimateSync } from "./climate/silo.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
@@ -64,6 +65,7 @@ app.use("/api", stockApi);
 app.use("/api", rainApi);
 app.use("/api", animalApi);
 app.use("/api", climateApi);
+app.use("/api", pastureApi);
 app.use("/api", mapApi);
 
 app.use("/tiles", requireAuth, tiles);

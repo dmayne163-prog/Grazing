@@ -30,7 +30,14 @@ const PICKERS = {
     accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv",
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
-      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).`,
+      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).<br>
+      Pasture: a Cibo Labs pasture report (.zip).`,
+  },
+  pasture: {
+    title: "Import a Cibo Labs pasture report",
+    accept: ".zip,.csv",
+    help: `The Pasture Biomass report from Cibo Labs, as the .zip they send (or the _tsdm_report.csv inside it).<br>
+      Importing it again later just adds the new months.`,
   },
   map: {
     title: "Import a map",
@@ -97,6 +104,11 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
   async function go(file) {
     dialog.querySelector(".body").innerHTML = `<p>Reading <b>${escapeHtml(file.name)}</b>…</p>`;
     try {
+      // Cibo Labs names its downloads pasturebiomass_<farm>_<time>.zip.
+      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_/i.test(file.name)) {
+        showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
+        return;
+      }
       if (/\.(xlsx|csv)$/i.test(file.name)) {
         const preview = await upload("/api/import/records/preview", file);
         if (preview.type === "mobs") showMobReview(file.name, preview);
@@ -545,6 +557,53 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
       }
     };
     check();
+  }
+
+  /* ------------------------- step 2: pasture report ------------------------- */
+
+  function showPastureReview(filename, p) {
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    const kg = (v) => (v === null || v === undefined ? "—" : `${Math.round(v).toLocaleString("en-AU")} kg/ha`);
+    const cov = p.coverage;
+    const outside = cov ? cov.short.filter((s) => s.share < 0.5) : [];
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review pasture report</h2>
+          <div class="muted small">${escapeHtml(filename)} · ${p.months} monthly readings · ${fmt(p.from)} to ${fmt(p.to)}</div>
+        </header>
+        <div class="body">
+          <p>${p.new} new month${p.new === 1 ? "" : "s"}${p.updated ? `, and ${p.updated} already imported that will be refreshed` : ""}.</p>
+          <dl class="facts">
+            <dt>Latest</dt><dd>${fmt(p.latest.date)}: median <b>${kg(p.latest.p50)}</b> across the farm, middle half ${kg(p.latest.p25)} to ${kg(p.latest.p75)}</dd>
+            <dt>District</dt><dd>median ${kg(p.latest.ref_p50)} in Cibo's reference area around the farm</dd>
+          </dl>
+          ${cov ? `
+          <h3>What the report covers</h3>
+          <p class="small">Cibo's farm boundary is <b>${cov.boundary_ha.toLocaleString("en-AU")} ha</b>. It takes in ${cov.covered_ha.toLocaleString("en-AU")} ha of the ${cov.paddock_ha.toLocaleString("en-AU")} ha of paddocks on the map.</p>
+          ${outside.length ? `<div class="note warn small">Outside Cibo's boundary, so not in these figures: ${outside.map((s) => `${escapeHtml(s.name)} (${s.area_ha} ha)`).join(", ")}.
+            Ask Cibo Labs to add that country to the farm's record.</div>` : ""}` : ""}
+          <p class="muted small gap-top">These are whole-farm figures: one reading a month for the property as Cibo has it, not paddock by paddock.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      try {
+        const res = await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
+        dialog.close();
+        onDone(`Imported the pasture report: ${res.added} new month${res.added === 1 ? "" : "s"}${res.updated ? `, ${res.updated} refreshed` : ""}`);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
   }
 
   /* ------------------------ step 2: movement history ------------------------ */

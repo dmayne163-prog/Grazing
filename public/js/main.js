@@ -4,6 +4,7 @@ import { Editor } from "./editor.js";
 import { openImport } from "./importer.js";
 import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
+import { renderPasture } from "./pasture.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -415,7 +416,7 @@ function overviewHtml() {
   const agist = agistHead(state.mobs);
 
   const tabs = [
-    ["paddocks", "Paddocks"], ["mobs", "Mobs"], ["animals", "Animals"], ["rain", "Rain"], ["water", "Water"], ["layers", "Layers"], ["tools", "Tools"],
+    ["paddocks", "Paddocks"], ["mobs", "Mobs"], ["animals", "Animals"], ["pasture", "Pasture"], ["rain", "Rain"], ["water", "Water"], ["layers", "Layers"], ["tools", "Tools"],
   ];
 
   let content = "";
@@ -427,6 +428,7 @@ function overviewHtml() {
 
   if (state.tab === "paddocks") content += paddockTable(paddocks);
   if (state.tab === "mobs") content += mobsTable();
+  if (state.tab === "pasture") content += `<div id="pastureTab"><p class="muted small">Loading…</p></div>`;
   if (state.tab === "rain") content += `<div id="rainTab"><p class="muted small">Loading…</p></div>`;
   if (state.tab === "animals") content += `<div id="animalsTab"></div>`;
   if (state.tab === "water") content += waterTable(water);
@@ -543,6 +545,7 @@ function toolsHtml() {
         <button class="btn" data-import="session"><b>Import a cattle session…</b><span>From the scales: Gallagher TSi, TWR-5 or APS (.csv)</span></button>
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
+        <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>The Pasture Biomass report Cibo emails (.zip)</span></button>
       </div>
     ` : ""}
 
@@ -584,6 +587,8 @@ function bindOverview() {
   const body = $("#panelBody");
   const rainEl = $("#rainTab", body);
   if (rainEl) renderRain(rainEl, { canEdit: canEdit(), toast });
+  const pastureEl = $("#pastureTab", body);
+  if (pastureEl) renderPasture(pastureEl, ctx);
   const animalsEl = $("#animalsTab", body);
   if (animalsEl) renderAnimalsTab(ctx, animalsEl);
   body.querySelectorAll("[data-tab]").forEach((b) => {

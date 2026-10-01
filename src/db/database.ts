@@ -298,6 +298,32 @@ CREATE TABLE IF NOT EXISTS climate_daily (
   PRIMARY KEY (cell, date)
 ) WITHOUT ROWID;
 
+-- Pasture biomass readings: total standing dry matter (TSDM, kg/ha) from Cibo
+-- Labs' satellite estimates. feature_id 0 means the whole farm as Cibo has it
+-- registered; otherwise it is the paddock. A re-import of the same report
+-- updates the same rows, so reports overlapping in time never double up.
+CREATE TABLE IF NOT EXISTS pasture_obs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  feature_id  INTEGER NOT NULL DEFAULT 0,
+  date        TEXT    NOT NULL,
+  source      TEXT    NOT NULL,         -- e.g. "cibo-farm-report"
+  tsdm_mean   REAL,
+  tsdm_p10    REAL,
+  tsdm_p25    REAL,
+  tsdm_p50    REAL,
+  tsdm_p75    REAL,
+  tsdm_p90    REAL,
+  growth      REAL,                     -- kg/ha grown since the previous reading
+  ref_p25     REAL,                     -- Cibo's reference area around the farm
+  ref_p50     REAL,
+  ref_p75     REAL,
+  rain        REAL,                     -- Cibo's own monthly rain figure, mm
+  import_file TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  UNIQUE (feature_id, date, source)
+);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
