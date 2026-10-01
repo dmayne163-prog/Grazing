@@ -66,6 +66,12 @@ function outlook(): Promise<Outlook | null> {
   return outlookCache.value;
 }
 
+// Worked out ahead of time — a minute after start-up, then hourly, which only
+// does anything when something has changed — so it's usually ready when the
+// tab is opened rather than taking ten seconds or more on the server.
+setTimeout(() => { outlook().catch(() => { /* logged */ }); }, 60_000).unref();
+setInterval(() => { outlook().catch(() => { /* logged */ }); }, 3_600_000).unref();
+
 function inWorker(): Promise<Outlook | null> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("../pasture/outlook-worker.js", import.meta.url));
