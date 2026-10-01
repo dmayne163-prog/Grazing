@@ -53,7 +53,7 @@ export async function renderAnimal(ctx, id, root) {
     <p class="sub">${[a.eid ? `EID ${escapeHtml(eidText(a.eid))}` : null, a.nlis ? `NLIS ${escapeHtml(a.nlis)}` : null].filter(Boolean).join(" · ") || "No EID recorded"}</p>
 
     <div class="statuscard">
-      <div class="big">${alive ? "" : `<span class="gatestate">${v.status === "dead" ? "Dead" : "Sold"} ${day(v.status_date)}${sale?.data?.destination ? ` to ${escapeHtml(sale.data.destination)}` : ""}</span> `}
+      <div class="big">${alive ? "" : `<span class="gatestate">${{ dead: "Dead", sold: "Sold", gone: "Off the books" }[v.status]} ${day(v.status_date)}${v.status === "sold" && sale?.data?.destination ? ` to ${escapeHtml(sale.data.destination)}` : ""}</span> `}
         ${v.mob_id ? `<button class="linkbtn" id="aMob">${escapeHtml(v.mob_name)}</button>` : '<span class="muted">Not in a mob</span>'}
         ${here && alive ? ` · ${escapeHtml(here.paddocks.join(" + "))}` : ""}</div>
       <div class="muted small">${last ? `${nf0.format(last.weight_kg)} kg on ${day(last.date)}${last.gain_per_day != null ? ` · ${gain(last.gain_per_day)} since the weighing before` : ""}` : "Not weighed"}</div>
@@ -114,12 +114,14 @@ export async function renderAnimal(ctx, id, root) {
         note: "Note",
         death: "Died",
         sale: `Sold${e.data?.destination ? ` to ${escapeHtml(e.data.destination)}` : ""}`,
+        gone: `Off the books${e.data?.destination ? ` · probably to ${escapeHtml(e.data.destination)}` : ""}`,
+        treatment: "Processed",
       }[e.kind] || escapeHtml(e.kind);
       // One undo per action: a sale with its sale weight is one batch.
       const undo = ctx.canEdit && e.batch && e.source === "app" && !seen.has(e.batch);
       if (e.batch) seen.add(e.batch);
       return `<li><span class="when">${day(e.date)}${e.time ? `<br><span class="muted tiny">${escapeHtml(e.time)}</span>` : ""}</span>
-        <span class="grow">${what}${e.text ? `<br><span class="muted tiny">${escapeHtml(e.text)}</span>` : ""}${e.source.startsWith("session:") ? '<br><span class="muted tiny">from a scales session</span>' : ""}</span>
+        <span class="grow">${what}${e.text ? `<br><span class="muted tiny">${escapeHtml(e.text)}</span>` : ""}${e.source.startsWith("session:") || e.source === "tsi" ? '<br><span class="muted tiny">from the scales</span>' : ""}</span>
         ${undo ? `<button class="linkbtn danger-link" data-undo="${e.batch}">Undo</button>` : ""}</li>`;
     }).join(""); })() || '<li class="muted">Nothing recorded.</li>'}</ul>`;
 
@@ -277,7 +279,7 @@ export async function loadMobAnimals(ctx, m, el) {
   const weighed = alive.filter((a) => a.last_weight_kg != null);
   const mean = weighed.length ? weighed.reduce((t, a) => t + a.last_weight_kg, 0) / weighed.length : null;
   el.innerHTML = `
-    <p class="small">${alive.length === m.head ? `All ${m.head} hd have records` : `${alive.length} animal records for ${m.head} hd`}${list.length > alive.length ? ` (plus ${list.length - alive.length} dead or sold)` : ""}${mean ? ` · latest weights average <b>${nf0.format(mean)} kg</b>` : ""}.</p>
+    <p class="small">${alive.length === m.head ? `All ${m.head} hd have records` : `${alive.length} animal records for ${m.head} hd`}${list.length > alive.length ? ` (plus ${list.length - alive.length} dead, sold or gone)` : ""}${mean ? ` · latest weights average <b>${nf0.format(mean)} kg</b>` : ""}.</p>
     ${alive.length > m.head ? `<p class="note warn small">${alive.length - m.head} more animal record${alive.length - m.head === 1 ? "" : "s"} than head. If the mob has had deaths or sales, open the animal and record it — untick “take 1 hd off” where the mob's count already allows for it.</p>`
       : alive.length < m.head ? `<p class="muted tiny">${m.head - alive.length} hd have no individual record yet.</p>` : ""}
     ${ctx.canEdit && alive.some((a) => !a.sex) ? `<div class="setsex small">
@@ -317,13 +319,13 @@ export async function loadMobAnimals(ctx, m, el) {
  * status and mob. The filters are remembered for the session in ctx.animalFilter.
  */
 export async function renderAnimalsTab(ctx, el) {
-  const f = (ctx.animalFilter ||= { q: "", status: "alive", mob: "" });
+  const f = (ctx.animalFilter ||= { q: "", status: "onhand", mob: "" });
   const mobs = [...ctx.state.mobs].sort((x, y) => x.name.localeCompare(y.name));
   el.innerHTML = `
     <div class="f"><input id="anQ" type="search" placeholder="Tag, EID or NLIS number…" value="${escapeHtml(f.q)}" autocomplete="off"></div>
     <div class="row2">
       <select id="anStatus" aria-label="Status">
-        ${[["alive", "On hand"], ["sold", "Sold"], ["dead", "Dead"], ["all", "All"]].map(([v, t]) => `<option value="${v}"${f.status === v ? " selected" : ""}>${t}</option>`).join("")}
+        ${[["onhand", "On hand"], ["unplaced", "Not in a mob"], ["sold", "Sold"], ["dead", "Dead"], ["gone", "Off the books"], ["all", "All"]].map(([v, t]) => `<option value="${v}"${f.status === v ? " selected" : ""}>${t}</option>`).join("")}
       </select>
       <select id="anMob" aria-label="Mob"><option value="">All mobs</option>${mobs.map((m) => `<option value="${m.id}"${String(m.id) === f.mob ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}</select>
     </div>
@@ -344,7 +346,7 @@ export async function renderAnimalsTab(ctx, el) {
     }
     if (mine !== seq) return; // a later keystroke has already asked again
     if (!r.total) {
-      list.innerHTML = `<p class="muted small">${f.q || f.mob || f.status !== "alive" ? "No animals match." : "No individual animal records yet. Import a cattle session to add them."}</p>`;
+      list.innerHTML = `<p class="muted small">${f.q || f.mob || f.status !== "onhand" ? "No animals match." : "No individual animal records yet. Import a cattle session to add them."}</p>`;
       return;
     }
     list.innerHTML = `

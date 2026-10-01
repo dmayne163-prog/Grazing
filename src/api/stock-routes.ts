@@ -18,6 +18,10 @@ import {
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
 import { getFeature } from "../map/store.js";
 import { parseSession, type ParsedSession } from "../animals/session.js";
+import { commitTsi, isTsiBackup, planTsi, readTsiBackup } from "../animals/tsi.js";
+import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { config } from "../config.js";
 import {
   commitOptiweigh, commitSession, isOptiweigh, moveAnimalsToMob, parseOptiweigh, planOptiweigh, planSession, type OptiweighRow,
 } from "../animals/store.js";
@@ -361,7 +365,7 @@ const mobKey = (m: { source_name: string; birth_date: string | null; breed: stri
 stockApi.post(
   "/import/records/preview",
   requireAdmin,
-  express.raw({ type: () => true, limit: "20mb" }),
+  express.raw({ type: () => true, limit: "100mb" }),
   async (req, res) => {
     const filename = decodeURIComponent(String(req.headers["x-filename"] ?? "")).slice(0, 200);
     if (!filename || !Buffer.isBuffer(req.body) || req.body.length === 0) {
@@ -369,6 +373,17 @@ stockApi.post(
       return;
     }
     try {
+      // A whole TSi / APS backup (WeighScaleCE.db). It's kept on disk until
+      // committed, as it's too big to hold in the preview row.
+      if (isTsiBackup(req.body)) {
+        const file = saveUpload(req.body, "tsi");
+        const plan = planTsi(readTsiBackup(file));
+        const id = storePreview(req, filename, "tsi-backup", { file, filename });
+        const allMobs = mobViews().map((v) => ({ id: v.mob.id, name: v.mob.name, head: v.state.head }))
+          .sort((x, y) => x.name.localeCompare(y.name));
+        res.json({ importId: id, type: "tsi", allMobs, ...plan });
+        return;
+      }
       // Optiweigh's raw individual weights: daily weights by EID from the walk-over unit.
       if (/.csv$/i.test(filename) && isOptiweigh(req.body.toString("utf8", 0, 300))) {
         const rows = parseOptiweigh(req.body.toString("utf8"));
@@ -504,6 +519,19 @@ stockApi.post(
   }
 );
 
+/** An uploaded file kept for its commit; older ones (over a day) are cleared out. */
+function saveUpload(buf: Buffer, prefix: string): string {
+  const dir = join(config.dataDir, "uploads");
+  mkdirSync(dir, { recursive: true });
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    if (Date.now() - statSync(p).mtimeMs > 86_400_000) rmSync(p, { force: true });
+  }
+  const file = join(dir, `${prefix}-${Date.now()}.db`);
+  writeFileSync(file, buf);
+  return file;
+}
+
 function storePreview(req: Request, filename: string, format: string, payload: unknown): number {
   db.prepare("DELETE FROM imports WHERE status = 'preview' AND ts < ?").run(Date.now() - 86_400_000);
   const r = db.prepare(`
@@ -515,7 +543,7 @@ function storePreview(req: Request, filename: string, format: string, payload: u
 stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const row = db.prepare("SELECT * FROM imports WHERE id = ?").get(id) as ImportRow | undefined;
-  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || row.format === "gallagher-session" || row.format === "optiweigh")) {
+  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || ["gallagher-session", "optiweigh", "tsi-backup"].includes(row.format))) {
     res.status(404).json({ error: "That import has expired or was already used. Upload the file again." });
     return;
   }
@@ -531,7 +559,9 @@ stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
             ? commitSessionImport(row, req.body, who(req))
             : row.format === "optiweigh"
               ? commitOptiweighImport(row, req.body, who(req))
-              : commitPaddocks(row, who(req));
+              : row.format === "tsi-backup"
+                ? commitTsiImport(row, req.body, who(req))
+                : commitPaddocks(row, who(req));
     db.prepare("UPDATE imports SET status = 'committed', committed_at = ? WHERE id = ?").run(Date.now(), id);
     addEvent({
       ts: Date.now(), source: "stock", kind: "import", severity: "info",
@@ -637,6 +667,29 @@ function commitOptiweighImport(row: ImportRow, body: unknown, username: string |
     return {
       created: r.weighed, batch: r.batch,
       summary: `Optiweigh: ${r.animals} animals (${r.created} new), ${r.weighed} weights, ${r.mob_weights} weekly mob weights`,
+    };
+  } catch (e) {
+    if (e instanceof StockError) throw new ImportError(e.message);
+    throw e;
+  }
+}
+
+function commitTsiImport(row: ImportRow, body: unknown, username: string | null) {
+  const { file, filename } = JSON.parse(row.payload) as { file: string; filename: string };
+  const raw = ((body ?? {}) as Record<string, unknown>)["place"];
+  const place: Record<string, number | "gone" | null> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (v === "gone") place[k] = "gone";
+      else if (Number.isInteger(v)) place[k] = v as number;
+    }
+  }
+  try {
+    const r = commitTsi(readTsiBackup(file), { filename, place }, username);
+    rmSync(file, { force: true });
+    return {
+      created: r.events, batch: r.batch,
+      summary: `TSi backup: ${r.created} new animals, ${r.updated} already here, ${r.events} records, ${r.sessions} sessions${r.placed ? `, ${r.placed} put in mobs or marked gone` : ""}`,
     };
   } catch (e) {
     if (e instanceof StockError) throw new ImportError(e.message);

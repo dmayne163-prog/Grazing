@@ -53,10 +53,15 @@ function eventsOf(id: number): AnimalEventRow[] {
   return db.prepare(`SELECT * FROM animal_events WHERE animal_id = ? ORDER BY ${ORDER}`).all(id) as AnimalEventRow[];
 }
 
-/** Alive, dead or sold — from the animal's own events, never a stored flag. */
-function statusOf(events: AnimalEventRow[]): { status: "alive" | "dead" | "sold"; date: string | null } {
-  const end = [...events].reverse().find((e) => e.kind === "death" || e.kind === "sale");
-  return end ? { status: end.kind === "death" ? "dead" : "sold", date: end.date } : { status: "alive", date: null };
+/**
+ * Alive, dead, sold or gone — from the animal's own events, never a stored
+ * flag. "Gone" is off the books without a record of how: written off in TSi,
+ * or trucked out and never marked.
+ */
+const ENDS = ["death", "sale", "gone"];
+function statusOf(events: AnimalEventRow[]): { status: "alive" | "dead" | "sold" | "gone"; date: string | null } {
+  const end = [...events].reverse().find((e) => ENDS.includes(e.kind));
+  return end ? { status: end.kind === "death" ? "dead" : end.kind === "sale" ? "sold" : "gone", date: end.date } : { status: "alive", date: null };
 }
 
 /** The mob an animal is in at the end of its events, if any. */
@@ -90,8 +95,8 @@ export interface AnimalSummary {
   last_weighed: string | null;
 }
 
-function summary(a: AnimalRow): AnimalSummary {
-  const ev = eventsOf(a.id);
+function summary(a: AnimalRow, events?: AnimalEventRow[]): AnimalSummary {
+  const ev = events ?? eventsOf(a.id);
   const w = [...ev].reverse().find((e) => e.kind === "weigh" && e.weight_kg !== null);
   const mob = currentMob(ev);
   const st = statusOf(ev);
@@ -119,7 +124,7 @@ export function searchAnimals(q: string, limit = 25): AnimalSummary[] {
        OR (? != '' AND eid LIKE ?)
     ORDER BY tag COLLATE NOCASE LIMIT ?
   `).all(like, like, digits.length >= 3 ? digits : "", `%${digits}%`, limit) as AnimalRow[];
-  return rows.map(summary);
+  return rows.map((a) => summary(a));
 }
 
 /**
@@ -130,11 +135,27 @@ export function searchAnimals(q: string, limit = 25): AnimalSummary[] {
 export function listAnimals(opts: { q?: string; status?: string; mob?: number | null; limit?: number }): { total: number; animals: AnimalSummary[] } {
   const rows = opts.q && opts.q.trim().length >= 2
     ? searchAnimals(opts.q, 5000)
-    : (db.prepare("SELECT * FROM animals ORDER BY tag COLLATE NOCASE, id").all() as AnimalRow[]).map(summary);
+    : allSummaries();
+  // "On hand" is alive and in a mob; "not in a mob" is alive with no mob here.
   const status = opts.status && opts.status !== "all" ? opts.status : null;
-  const filtered = rows.filter((a) =>
-    (status === null || a.status === status) && (opts.mob == null || a.mob_id === opts.mob));
+  const fits = (a: AnimalSummary) =>
+    status === null ? true
+      : status === "onhand" ? a.status === "alive" && a.mob_id !== null
+        : status === "unplaced" ? a.status === "alive" && a.mob_id === null
+          : a.status === status;
+  const filtered = rows.filter((a) => fits(a) && (opts.mob == null || a.mob_id === opts.mob));
   return { total: filtered.length, animals: filtered.slice(0, opts.limit ?? 500) };
+}
+
+/** Every animal, its events read in one pass rather than one query each. */
+function allSummaries(): AnimalSummary[] {
+  const byAnimal = new Map<number, AnimalEventRow[]>();
+  for (const e of db.prepare(`SELECT * FROM animal_events ORDER BY ${ORDER}`).all() as AnimalEventRow[]) {
+    const list = byAnimal.get(e.animal_id);
+    if (list) list.push(e); else byAnimal.set(e.animal_id, [e]);
+  }
+  return (db.prepare("SELECT * FROM animals ORDER BY tag COLLATE NOCASE, id").all() as AnimalRow[])
+    .map((a) => summary(a, byAnimal.get(a.id) ?? []));
 }
 
 /* ---------------------------------- edit --------------------------------- */
@@ -185,7 +206,7 @@ export function animalsInMob(mobId: number): AnimalSummary[] {
   const ids = db.prepare("SELECT DISTINCT animal_id FROM animal_events WHERE mob_id = ?").all(mobId) as Array<{ animal_id: number }>;
   return ids
     .map(({ animal_id }) => db.prepare("SELECT * FROM animals WHERE id = ?").get(animal_id) as AnimalRow)
-    .map(summary)
+    .map((a) => summary(a))
     .filter((s) => s.mob_id === mobId)
     .sort((a, b) => (a.tag ?? "").localeCompare(b.tag ?? "", "en", { numeric: true }));
 }
@@ -222,7 +243,7 @@ export function animalView(id: number) {
       if (open && open.to === null) open.to = e.date;
       spans.push({ mob_id: e.mob_id, from: e.date, to: null });
     }
-    if ((e.kind === "leave" || e.kind === "death" || e.kind === "sale")) {
+    if (e.kind === "leave" || ENDS.includes(e.kind)) {
       const open = spans[spans.length - 1];
       if (open && open.to === null) open.to = e.date;
     }

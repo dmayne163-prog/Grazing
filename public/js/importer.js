@@ -27,10 +27,10 @@ const fmtArea = (c) =>
 const PICKERS = {
   any: {
     title: "Import",
-    accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv",
+    accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv,.db",
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
-      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv), or Optiweigh's raw individual data (.csv).<br>
+      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv), or Optiweigh's raw individual data (.csv), or a whole TSi / APS backup (WeighScaleCE.db).<br>
       Pasture: a Cibo Labs download (.zip): the farm's Pasture Biomass report, or PastureKey's paddock readings.`,
   },
   optiweigh: {
@@ -58,9 +58,10 @@ const PICKERS = {
   },
   session: {
     title: "Import a cattle session",
-    accept: ".csv",
+    accept: ".csv,.db",
     help: `A weighing or processing session from the scales — Gallagher TSi, TWR-5 or APS — saved as a .csv file.<br>
-      Each animal's EID, tag, weight and notes come in, and you choose which mob they belong to.`,
+      Each animal's EID, tag, weight and notes come in, and you choose which mob they belong to.<br>
+      Or a whole TSi / APS backup (WeighScaleCE.db, from a backup folder): every animal and session at once.`,
   },
 };
 
@@ -116,13 +117,14 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
         return;
       }
-      if (/\.(xlsx|csv)$/i.test(file.name)) {
+      if (/\.(xlsx|csv|db)$/i.test(file.name)) {
         const preview = await upload("/api/import/records/preview", file);
         if (preview.type === "mobs") showMobReview(file.name, preview);
         else if (preview.type === "movements") showMovementReview(file.name, preview);
         else if (preview.type === "rainfall") showRainReview(file.name, preview);
         else if (preview.type === "session") showSessionReview(file.name, preview);
         else if (preview.type === "optiweigh") showOptiweighReview(file.name, preview);
+        else if (preview.type === "tsi") showTsiReview(file.name, preview);
         else showPaddockCheck(file.name, preview);
         return;
       }
@@ -694,6 +696,67 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         onDone(`Imported ${res.summary}`, res.batch);
       } catch (e) {
         btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  /* ------------------------- step 2: TSi / APS backup ------------------------- */
+
+  function showTsiReview(filename, p) {
+    const n = (x) => Number(x).toLocaleString("en-AU");
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    const sexes = (o) => Object.entries(o).map(([k, v]) => `${v} ${k === "unknown" ? "sex not recorded" : k}`).join(", ");
+    const mobOptions = (sel) => `<option value="">Leave not in a mob</option><option value="gone">No longer here (off the books)</option>
+      <optgroup label="Put them in">${p.allMobs.map((m) => `<option value="${m.id}"${m.id === sel ? " selected" : ""}>${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</optgroup>`;
+    const gone = Object.entries(p.endings.gone_by).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${n(v)} ${escapeHtml(k)}`).join(", ");
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review TSi backup</h2>
+          <div class="muted small">${escapeHtml(filename)} · ${n(p.animals)} animals · ${n(p.sessions)} sessions · up to ${fmt(p.backup_date)}</div>
+        </header>
+        <div class="body">
+          <p class="small">History only: <b>no mob's head count changes</b>. ${n(p.matched)} animals are already here (matched by EID) and keep their mob; ${n(p.new_animals)} are new.</p>
+          <dl class="facts">
+            <dt>Weights</dt><dd>${n(p.weights)}${p.weights_already ? ` <span class="muted">(${n(p.weights_already)} already here, skipped)</span>` : ""}</dd>
+            <dt>Treatments, drafting</dt><dd>${n(p.processed)} session records</dd>
+            <dt>Condition scores</dt><dd>${n(p.scores)}</dd>
+            <dt>Notes</dt><dd>${n(p.notes)}</dd>
+            <dt>Left the herd</dt><dd>${n(p.endings.sale)} sold · ${n(p.endings.death)} died · ${n(p.endings.gone)} off the books (${gone})</dd>
+          </dl>
+          ${p.sessions_reused.length ? `<p class="muted tiny">Sessions already imported from CSV are reused, not doubled: ${p.sessions_reused.map((s) => escapeHtml(s.tsi)).join("; ")}.</p>` : ""}
+          ${p.conflicts.length ? `<div class="note warn">${p.conflicts.length} animal${p.conflicts.length === 1 ? " is" : "s are"} in a mob here but marked dead in TSi; the app's record is kept.</div>` : ""}
+          <h3>Still current in TSi, but not in any mob here</h3>
+          <p class="small">${n(p.unplaced_total)} animals, grouped by the session they were last scanned in. For each group: put them in a mob (from the day they were last scanned), record them as no longer here, or leave them for later — they show under “Not in a mob” on the Animals tab.</p>
+          <table class="list"><thead><tr><th>Last scanned</th><th class="num">Hd</th><th>Placement</th></tr></thead><tbody>
+            ${p.unplaced.map((c) => `<tr><td>${fmt(c.date)} · <b>${escapeHtml(c.name)}</b><br><span class="muted tiny">${sexes(c.sexes)}${c.mean_kg ? ` · ${c.mean_kg} kg then` : ""}${c.in_app.length ? ` · others from that session: ${c.in_app.map((x) => `${x.count} in ${escapeHtml(x.name)}`).join(", ")}` : ""}</span></td>
+              <td class="num">${c.head}</td><td><select data-cohort="${c.sid}">${mobOptions(null)}</select></td></tr>`).join("")}
+          </tbody></table>
+          <p class="muted tiny">These records sit under a mob's head count; they don't add to it. Check the mob's head before putting a group in it.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      btn.textContent = "Importing…";
+      const place = {};
+      dialog.querySelectorAll("[data-cohort]").forEach((sel) => {
+        if (sel.value) place[sel.dataset.cohort] = sel.value === "gone" ? "gone" : Number(sel.value);
+      });
+      try {
+        const res = await send("POST", `/api/import/records/${p.importId}/commit`, { place });
+        dialog.close();
+        onDone(`Imported ${res.summary}`, res.batch);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = "Import";
         dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
       }
     };
