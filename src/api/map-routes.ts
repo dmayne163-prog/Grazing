@@ -5,7 +5,7 @@ import { addEvent, db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { KINDS } from "../map/kinds.js";
 import { GeometryError } from "../map/geometry.js";
-import { exportGeoJson, exportKml } from "../map/export.js";
+import { exportGeoJson, exportKml, exportPaddocksGeoJson } from "../map/export.js";
 import { ImportError, parseMapFile, type Candidate } from "../map/importers.js";
 import {
   ConflictError, createFeature, createFeatures, deleteFeature, getFeature, listDeleted,
@@ -261,6 +261,12 @@ mapApi.get("/export/map.geojson", (_req, res) => {
   res.setHeader("Content-Type", "application/geo+json");
   res.setHeader("Content-Disposition", `attachment; filename="${fileBase()}-map-${stamp()}.geojson"`);
   res.send(JSON.stringify(exportGeoJson(), null, 1));
+});
+
+mapApi.get("/export/paddocks.geojson", (_req, res) => {
+  res.setHeader("Content-Type", "application/geo+json");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileBase()}-paddocks-${stamp()}.geojson"`);
+  res.send(JSON.stringify(exportPaddocksGeoJson()));
 });
 
 mapApi.get("/export/map.kml", (_req, res) => {

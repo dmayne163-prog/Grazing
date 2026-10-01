@@ -552,6 +552,8 @@ function toolsHtml() {
       <a class="btn" href="/api/export/map.geojson" download>GeoJSON</a>
       <a class="btn" href="/api/export/map.kml" download>Google Earth (KML)</a>
     </div>
+    <p class="muted small">Just the paddock boundaries, with each paddock's name and area. This is the file to send Cibo Labs (or anyone else who needs the paddocks) when the fences change.</p>
+    <div class="btns"><a class="btn" href="/api/export/paddocks.geojson" download>Paddock boundaries (GeoJSON)</a></div>
 
     ${qld ? `
       <h3>Offline map</h3>

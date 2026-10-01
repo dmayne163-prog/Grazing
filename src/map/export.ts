@@ -15,6 +15,48 @@ export function exportGeoJson(): { type: "FeatureCollection"; features: MapFeatu
   return { type: "FeatureCollection", features: listFeatures().map(toFeature) };
 }
 
+/** Signed area of a ring in plain lon/lat: positive when anticlockwise. */
+const ringSign = (r: Position[]) => {
+  let a = 0;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j]![0]! * r[i]![1]! - r[i]![0]! * r[j]![1]!;
+  return a;
+};
+
+/** RFC 7946 winding (outer rings anticlockwise, holes clockwise), 2-D, 7 decimals (~1 cm). */
+function tidyPolygon(rings: Position[][]): number[][][] {
+  return rings.map((ring, i) => {
+    const pts = ring.map((p) => [Math.round(p[0]! * 1e7) / 1e7, Math.round(p[1]! * 1e7) / 1e7]);
+    const ccw = ringSign(pts) > 0;
+    return (i === 0) === ccw ? pts : pts.reverse();
+  });
+}
+
+/**
+ * Paddock boundaries only, with plain flat properties: what a mapping service
+ * such as Cibo Labs wants when it's given the property's paddocks. Points,
+ * fences and the app's own bookkeeping are left out.
+ */
+export function exportPaddocksGeoJson() {
+  const features = listFeatures()
+    .filter((r) => r.kind === "paddock")
+    .map(toFeature)
+    .filter((f) => f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon")
+    .sort((a, b) => a.properties.name.localeCompare(b.properties.name, undefined, { numeric: true }))
+    .map((f) => ({
+      type: "Feature" as const,
+      properties: {
+        name: f.properties.name,
+        area_ha: f.properties.area_ha === null ? null : Math.round(f.properties.area_ha * 100) / 100,
+        land_use: f.properties.subtype,
+        paddock_id: f.id,
+      },
+      geometry: f.geometry.type === "Polygon"
+        ? { type: "Polygon" as const, coordinates: tidyPolygon(f.geometry.coordinates) }
+        : { type: "MultiPolygon" as const, coordinates: (f.geometry.coordinates as Position[][][]).map(tidyPolygon) },
+    }));
+  return { type: "FeatureCollection" as const, features };
+}
+
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
