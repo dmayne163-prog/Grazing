@@ -254,6 +254,8 @@ function select(id, { zoom = false } = {}) {
 
 function openSheet(open) {
   document.querySelector(".app").classList.toggle("sheet-open", open);
+  $("#grip").setAttribute("aria-expanded", String(open));
+  $("#gripLabel").textContent = open ? "▼ Hide menu" : "▲ Show menu";
   // The map's size changes with the sheet on a phone.
   setTimeout(() => farm.map.invalidateSize(), 220);
 }
@@ -1086,7 +1088,23 @@ async function start() {
   $("#search").addEventListener("keydown", (e) => { if (e.key === "Enter") onSearch(); });
   $("#fitBtn").onclick = () => farm.fitAll();
   $("#locateBtn").onclick = toggleLocate;
-  $("#grip").onclick = () => openSheet(!document.querySelector(".app").classList.contains("sheet-open"));
+  const sheetOpen = () => document.querySelector(".app").classList.contains("sheet-open");
+  $("#grip").onclick = () => openSheet(!sheetOpen());
+  // A swipe on the bar works as well as a tap: up opens, down closes.
+  let swipeY = null;
+  $("#grip").addEventListener("touchstart", (e) => { swipeY = e.touches[0].clientY; }, { passive: true });
+  $("#grip").addEventListener("touchend", (e) => {
+    if (swipeY === null) return;
+    const dy = e.changedTouches[0].clientY - swipeY;
+    swipeY = null;
+    if (Math.abs(dy) < 25) return; // a tap; the click handler deals with it
+    e.preventDefault();
+    openSheet(dy < 0);
+  });
+  // On a phone, tapping anywhere in the closed sheet opens it too.
+  $("#panelBody").addEventListener("click", () => {
+    if (!sheetOpen() && matchMedia("(max-width:760px)").matches) openSheet(true);
+  });
   $("#signOut").onclick = async () => {
     try { await send("POST", "/api/auth/logout"); } finally { location.href = "/"; }
   };

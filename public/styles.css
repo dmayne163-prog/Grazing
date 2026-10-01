@@ -100,7 +100,9 @@ button{cursor:pointer}
 .stage{position:relative;flex:1;min-height:0}
 /* The map stops at the panel, so fitting to the property centres it in what
    is actually visible. On a phone the panel is a sheet over the map instead. */
-#map{position:absolute;top:0;left:0;bottom:0;right:var(--panel-w);background:#10161a}
+/* Its own stacking layer, so Leaflet's controls (z-index up to 1000) can't draw
+   over the panel where the two overlap on a phone. */
+#map{position:absolute;top:0;left:0;bottom:0;right:var(--panel-w);background:#10161a;z-index:0}
 
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{
@@ -200,6 +202,8 @@ button{cursor:pointer}
   /* The map stops at the top of the sheet, so its own controls and a fit to
      the property stay in view rather than disappearing underneath it. */
   #map{bottom:calc(var(--sheet-h, 150px) - 14px)}
+  /* The bottom 14px of the map sits under the sheet; keep the credits clear of it. */
+  .leaflet-bottom{bottom:14px}
   .tools{max-width:calc(100% - 64px);left:54px;top:10px}
   .tools button{padding:6px 9px}
   .mapbtns{top:auto;bottom:calc(var(--sheet-h, 150px) + 60px)}
@@ -216,15 +220,18 @@ button{cursor:pointer}
   }
   /* Set on .app so the map buttons and toast move with the sheet. */
   .app.sheet-open{--sheet-h:72%}
+  /* A full-width bar with a label, so it's obvious where to tap to bring
+     the menu up — a thin grey line on its own wasn't. */
   .grip{
-    display:block;flex:0 0 auto;
-    height:22px;background:none;border:0;position:relative;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+    flex:0 0 auto;width:100%;height:42px;padding:6px 0 4px;
+    background:var(--surface-2);border:0;border-bottom:1px solid var(--line);
+    border-radius:14px 14px 0 0;color:var(--ink-2);touch-action:none;
   }
-  .grip::after{
-    content:"";position:absolute;left:50%;top:8px;transform:translateX(-50%);
-    width:40px;height:4px;border-radius:2px;background:var(--line);
-  }
-  .panel-body{padding-top:0}
+  .grip:active{background:var(--line)}
+  .grip-handle{width:56px;height:5px;border-radius:3px;background:var(--accent)}
+  .grip-label{font-size:12.5px;font-weight:650;letter-spacing:.02em}
+  .panel-body{padding-top:10px}
   /* Seven tabs don't fit across a phone; wrap them rather than let Layers and
      Tools slide off the edge where nobody would think to look. */
   .tabs{flex-wrap:wrap;row-gap:0}
