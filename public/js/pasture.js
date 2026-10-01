@@ -5,7 +5,7 @@
  * Whole-farm figures for now. Paddock-by-paddock readings come with a
  * PastureKey download, and the pasture model builds on both.
  */
-import { get } from "./api.js";
+import { get, send } from "./api.js";
 import { escapeHtml, pastureColour } from "./map.js";
 
 // Validated on the dark surface (#151A1D) beside the SILO orange: lightness
@@ -45,9 +45,10 @@ export async function renderPasture(el, ctx) {
     return;
   }
 
-  el.innerHTML = `${paddockSection(paddocks, ctx)}${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}${importBtn}`;
+  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}${importBtn}`;
   bind();
   if (farm.length) drawPasture(el.querySelector("#pastureChart"), farm);
+  loadOutlook(el.querySelector("#outlook"), ctx);
 }
 
 /** Every paddock's latest PastureKey reading: feed on offer, lowest first. */
@@ -265,8 +266,10 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
       <span><i class="sw sw-pasture"></i>Total pasture</span>
       <span><i class="sw sw-pasture-band"></i>Green part</span>
       ${periods.length ? '<span><i class="sw sw-grazed"></i>Stock in the paddock</span>' : ""}
+      <span class="ol-key" hidden><i class="sw sw-outlook"></i>Outlook: past seasons' range, median dashed</span>
     </div>
     <div class="rainchart" id="paddockPastureChart"></div>
+    <div id="paddockOutlook"></div>
     <details class="gap-top"><summary class="small">Readings as a table</summary>
       <table class="list"><thead><tr><th>Date</th><th class="num">Pasture</th><th class="num">Green</th><th class="num">Change a day</th><th class="num">Seen clearly</th></tr></thead><tbody>
         ${[...series].reverse().map((r) => `<tr><td>${fmtDay(r.date)}</td><td class="num">${kg(r.tsdm)}</td><td class="num muted">${kg(r.green)}</td>
@@ -275,6 +278,24 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
       </tbody></table>
     </details>`;
   drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods);
+
+  // The outlook can take a few seconds the first time; the readings show meanwhile.
+  let ol = null;
+  try { ol = await get(`/api/pasture/outlook/${featureId}`); } catch { return; }
+  if (!ol || !stillCurrent() || !el.isConnected || !ol.series?.length) return;
+  drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods, ol);
+  el.querySelector(".ol-key").hidden = false;
+  const R = ol.residual.toLocaleString("en-AU");
+  const span = (v) => `${Math.round(v.median).toLocaleString("en-AU")} <span class="muted">(${Math.round(v.low).toLocaleString("en-AU")}–${Math.round(v.high).toLocaleString("en-AU")})</span>`;
+  el.querySelector("#paddockOutlook").innerHTML = `
+    <dl class="facts gap-top">
+      <dt>Today</dt><dd>about <b>${kg(ol.now)}</b> <span class="muted">estimated on from the last reading</span></dd>
+      ${ol.days_left ? `<dt>To ${R} kg/ha</dt><dd><b>${daysText(ol.days_left.median)} days</b> <span class="muted">with the stock now in it (${ol.ae_per_ha.toFixed(2)} AE/ha); ${daysText(ol.days_left.low)} in a poor run, ${daysText(ol.days_left.high)} in a good one</span></dd>` : ""}
+      <dt>In 3 months</dt><dd>${span(ol.at["90"])} kg/ha</dd>
+      <dt>In 6 months</dt><dd>${span(ol.at["180"])} kg/ha</dd>
+      ${ol.capacity_ae !== null ? `<dt>Carries</dt><dd>about ${ol.capacity_ae.toLocaleString("en-AU")} AE long term <span class="muted">(${(ol.capacity_ae / ol.area_ha).toFixed(2)} AE/ha)</span></dd>` : ""}
+    </dl>
+    <p class="muted tiny">The outlook runs on from today with the weather of each year since 1890${ol.ae_per_ha > 0 ? " and the stock staying put" : ", no stock in it"}; brackets are the low and high of those seasons (20th and 80th percentile).${ol.multiplier !== null ? ` This paddock grows ${Math.round(ol.multiplier * 100)}% of the farm's typical rate, judged from its readings.` : ""}</p>`;
 }
 
 const shiftDays = (d, n) => {
@@ -285,15 +306,17 @@ const shiftDays = (d, n) => {
 
 const GRAZED = "#A3B1B7";
 
-function drawPaddockPasture(host, rows, periods) {
+function drawPaddockPasture(host, rows, periods, ol = null) {
   if (!host) return;
-  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(240, Math.max(160, W * 0.34)));
+  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(250, Math.max(170, W * 0.36)));
   const pad = { l: 42, r: 8, t: 14, b: 20 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
-  const max = Math.max(500, ...rows.map((r) => r.tsdm + (r.error || 0)));
+  const fan = ol?.series?.length ? ol.series : [];
+  const max = Math.max(500, ...rows.map((r) => r.tsdm + (r.error || 0)), ...fan.map((f) => f.p90), ol?.residual || 0);
   const step = max > 4000 ? 1000 : max > 2000 ? 500 : 250;
   const top = Math.ceil(max / step) * step;
-  const first = rows[0].date, lastD = rows[rows.length - 1].date;
+  const first = rows[0].date;
+  const lastD = fan.length ? fan[fan.length - 1].date : rows[rows.length - 1].date;
   const t0 = Date.parse(first), t1 = Date.parse(lastD);
   const x = (d) => pad.l + ((Math.min(t1, Math.max(t0, Date.parse(d))) - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (v) => pad.t + plotH - (v / top) * plotH;
@@ -302,17 +325,22 @@ function drawPaddockPasture(host, rows, periods) {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("width", "100%");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", `Paddock pasture, ${rows.length} readings`);
+  svg.setAttribute("aria-label", `Paddock pasture, ${rows.length} readings${fan.length ? ", and the outlook" : ""}`);
   const add = (tag, attrs) => {
     const n = document.createElementNS(SVGNS, tag);
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
     svg.appendChild(n);
     return n;
   };
+  const path = (pts) => pts.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
+  const band = (lo, hi, opacity) => {
+    const d = path(fan.map((f) => [x(f.date), y(f[hi])])) + " " + [...fan].reverse().map((f) => `L${x(f.date).toFixed(1)},${y(f[lo]).toFixed(1)}`).join(" ") + " Z";
+    add("path", { d, fill: PASTURE, "fill-opacity": opacity });
+  };
 
   // Grazing periods behind everything, clipped to the chart's dates.
   for (const p of periods) {
-    const to = p.to || lastD;
+    const to = p.to || rows[rows.length - 1].date;
     if (to < first || p.from > lastD) continue;
     add("rect", { x: x(p.from), y: pad.t, width: Math.max(1.5, x(to) - x(p.from)), height: plotH, fill: GRAZED, "fill-opacity": 0.13 });
   }
@@ -320,15 +348,15 @@ function drawPaddockPasture(host, rows, periods) {
     add("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), stroke: v === 0 ? AXIS : GRID, "stroke-width": 1 });
     add("text", { x: pad.l - 5, y: y(v) + 3.5, "text-anchor": "end", "font-size": 10, fill: TICK_TEXT }).textContent = v.toLocaleString("en-AU");
   }
-  // Month ticks, labelled every second month on a narrow chart.
-  const start = new Date(`${first.slice(0, 7)}-01T00:00:00Z`);
-  for (let d = new Date(start), i = 0; d.getTime() <= t1; d.setUTCMonth(d.getUTCMonth() + 1), i++) {
+  // Month ticks; on a narrow or long chart only every second or third month is labelled.
+  const months = Math.round((t1 - t0) / (30.4 * 86_400_000));
+  const every = W < 460 ? (months > 14 ? 3 : 2) : months > 16 ? 2 : 1;
+  for (let d = new Date(`${first.slice(0, 7)}-01T00:00:00Z`); d.getTime() <= t1; d.setUTCMonth(d.getUTCMonth() + 1)) {
     const iso = d.toISOString().slice(0, 10);
     if (iso < first) continue;
-    const xx = x(iso);
+    const xx = x(iso), m = d.getUTCMonth();
     add("line", { x1: xx, x2: xx, y1: pad.t + plotH, y2: pad.t + plotH + 3, stroke: AXIS });
-    const m = d.getUTCMonth();
-    if (W >= 460 || m % 2 === 0) {
+    if (m % every === 0) {
       add("text", { x: xx, y: H - 5, "text-anchor": "middle", "font-size": 10, fill: TICK_TEXT })
         .textContent = m === 0 ? String(d.getUTCFullYear()) : d.toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" });
     }
@@ -336,14 +364,26 @@ function drawPaddockPasture(host, rows, periods) {
 
   const green = rows.filter((r) => r.green !== null);
   if (green.length > 1) {
-    const d = green.map((r, i) => `${i ? "L" : "M"}${x(r.date).toFixed(1)},${y(r.green).toFixed(1)}`).join(" ")
-      + ` L${x(green[green.length - 1].date).toFixed(1)},${y(0)} L${x(green[0].date).toFixed(1)},${y(0)} Z`;
+    const d = path(green.map((r) => [x(r.date), y(r.green)])) + ` L${x(green[green.length - 1].date).toFixed(1)},${y(0)} L${x(green[0].date).toFixed(1)},${y(0)} Z`;
     add("path", { d, fill: PASTURE, "fill-opacity": 0.22 });
   }
-  add("path", { d: rows.map((r, i) => `${i ? "L" : "M"}${x(r.date).toFixed(1)},${y(r.tsdm).toFixed(1)}`).join(" "), fill: "none", stroke: PASTURE, "stroke-width": 2, "stroke-linejoin": "round" });
+
+  if (fan.length) {
+    band("p10", "p90", 0.1);
+    band("p20", "p80", 0.2);
+    add("path", { d: path(fan.map((f) => [x(f.date), y(f.p50)])), fill: "none", stroke: PASTURE, "stroke-width": 2, "stroke-dasharray": "5 4" });
+    const xt = x(ol.as_of);
+    add("line", { x1: xt, x2: xt, y1: pad.t, y2: pad.t + plotH, stroke: INK, "stroke-width": 1, opacity: 0.35 });
+    add("text", { x: xt + 4, y: pad.t + 10, "font-size": 10, fill: TICK_TEXT }).textContent = "today";
+    const yr = y(ol.residual);
+    add("line", { x1: pad.l, x2: W - pad.r, y1: yr, y2: yr, stroke: "#E0A845", "stroke-width": 1.5, "stroke-dasharray": "3 3" });
+    add("text", { x: W - pad.r - 2, y: yr - 4, "text-anchor": "end", "font-size": 10, fill: "#E0A845" }).textContent = `graze to ${ol.residual.toLocaleString("en-AU")}`;
+  }
+
+  add("path", { d: path(rows.map((r) => [x(r.date), y(r.tsdm)])), fill: "none", stroke: PASTURE, "stroke-width": 2, "stroke-linejoin": "round" });
   const lr = rows[rows.length - 1];
   add("circle", { cx: x(lr.date), cy: y(lr.tsdm), r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2 });
-  add("text", { x: x(lr.date) - 6, y: y(lr.tsdm) - 8, "text-anchor": "end", "font-size": 10, fill: INK }).textContent = Math.round(lr.tsdm).toLocaleString("en-AU");
+  if (!fan.length) add("text", { x: x(lr.date) - 6, y: y(lr.tsdm) - 8, "text-anchor": "end", "font-size": 10, fill: INK }).textContent = Math.round(lr.tsdm).toLocaleString("en-AU");
 
   const cross = add("line", { x1: 0, x2: 0, y1: pad.t, y2: pad.t + plotH, stroke: AXIS, "stroke-width": 1, visibility: "hidden" });
   const dot = add("circle", { r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2, visibility: "hidden" });
@@ -355,22 +395,114 @@ function drawPaddockPasture(host, rows, periods) {
   tip.className = "charttip";
   tip.hidden = true;
   host.appendChild(tip);
-  const xs = rows.map((r) => x(r.date));
+  // Readings, then the outlook's points beyond the last reading: one list to snap to.
+  const points = [
+    ...rows.map((r) => ({ x: x(r.date), y: y(r.tsdm), r })),
+    ...fan.filter((f) => f.date > lr.date).map((f) => ({ x: x(f.date), y: y(f.p50), f })),
+  ];
   const show = (e) => {
     const box = svg.getBoundingClientRect();
     const px = ((e.clientX - box.left) / box.width) * W;
-    let i = 0;
-    for (let k = 1; k < xs.length; k++) if (Math.abs(xs[k] - px) < Math.abs(xs[i] - px)) i = k;
-    const r = rows[i];
-    const inPaddock = periods.find((p) => p.from <= r.date && (!p.to || p.to >= r.date));
-    cross.setAttribute("x1", xs[i]); cross.setAttribute("x2", xs[i]); cross.setAttribute("visibility", "visible");
-    dot.setAttribute("cx", xs[i]); dot.setAttribute("cy", y(r.tsdm)); dot.setAttribute("visibility", "visible");
-    tip.textContent = `${fmtDay(r.date)}: ${kg(r.tsdm)}${r.green !== null ? ` · green ${kg(r.green)}` : ""}${inPaddock ? ` · ${inPaddock.mob} in` : ""}`;
+    let best = points[0];
+    for (const pt of points) if (Math.abs(pt.x - px) < Math.abs(best.x - px)) best = pt;
+    cross.setAttribute("x1", best.x); cross.setAttribute("x2", best.x); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", best.x); dot.setAttribute("cy", best.y); dot.setAttribute("visibility", "visible");
+    if (best.r) {
+      const r = best.r;
+      const inPaddock = periods.find((p) => p.from <= r.date && (!p.to || p.to >= r.date));
+      tip.textContent = `${fmtDay(r.date)}: ${kg(r.tsdm)}${r.green !== null ? ` · green ${kg(r.green)}` : ""}${inPaddock ? ` · ${inPaddock.mob} in` : ""}`;
+    } else {
+      const f = best.f;
+      tip.textContent = `${fmtDay(f.date)}, outlook: median ${kg(f.p50)} · low ${Math.round(f.p20).toLocaleString("en-AU")} · high ${Math.round(f.p80).toLocaleString("en-AU")}`;
+    }
     tip.hidden = false;
     const width = host.clientWidth, half = tip.offsetWidth / 2;
-    tip.style.left = `${Math.min(width - half, Math.max(half, xs[i] * (width / W)))}px`;
+    tip.style.left = `${Math.min(width - half, Math.max(half, best.x * (width / W)))}px`;
   };
   svg.addEventListener("pointermove", show);
   svg.addEventListener("pointerdown", show);
   svg.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+}
+
+
+/* -------------------------------- outlook ---------------------------------- */
+
+const t0 = (v) => `${Math.round(v).toLocaleString("en-AU")} t`;
+const daysText = (d) => (d === null ? "180+" : String(d));
+
+/**
+ * The model's view of the place: stock against long-term carrying capacity,
+ * feed above the residual now and ahead, and days of grazing left in each
+ * stocked paddock. Loaded on its own: the first working-out takes seconds.
+ */
+async function loadOutlook(host, ctx) {
+  if (!host) return;
+  let o;
+  try {
+    o = await get("/api/pasture/outlook");
+  } catch (e) {
+    host.innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if (!host.isConnected) return;
+  if (!o || !o.property) {
+    host.innerHTML = '<p class="muted small">The outlook needs PastureKey paddock readings and SILO weather.</p>';
+    return;
+  }
+  const p = o.property, R = o.residual;
+  const names = new Map(o.paddocks.map((x) => [x.id, x]));
+  const stocked = o.paddocks.filter((x) => x.ae_per_ha > 0 && x.days_left)
+    .sort((a, b) => (a.days_left.median ?? 999) - (b.days_left.median ?? 999));
+  const f = o.fit;
+  host.innerHTML = `
+    <h3>Outlook · from ${fmtDay(o.as_of)}</h3>
+    <dl class="facts">
+      <dt>Stock</dt><dd><b>${p.ae.toLocaleString("en-AU")} AE</b> <span class="muted">on hand</span></dd>
+      <dt>Carrying capacity</dt><dd>about <b>${p.capacity_ae.toLocaleString("en-AU")} AE</b> <span class="muted">long term, eating a quarter of a median year's growth</span></dd>
+    </dl>
+    <p class="small">Feed above ${R.toLocaleString("en-AU")} kg/ha across the place, with today's stock:</p>
+    <table class="list outlook">
+      <thead><tr><th></th><th class="num">Low</th><th class="num">Median</th><th class="num">High</th></tr></thead>
+      <tbody>
+        <tr><td>Now</td><td class="num"></td><td class="num"><b>${t0(p.feed_t)}</b></td><td class="num"></td></tr>
+        ${[["30", "In a month"], ["90", "In 3 months"], ["180", "In 6 months"]].map(([k, label]) => `
+          <tr><td>${label}</td><td class="num muted">${t0(p.at[k].low)}</td><td class="num">${t0(p.at[k].median)}</td><td class="num muted">${t0(p.at[k].high)}</td></tr>`).join("")}
+      </tbody>
+    </table>
+    ${stocked.length ? `
+    <p class="small gap-top">Days until each stocked paddock is down to ${R.toLocaleString("en-AU")} kg/ha, if the stock stay:</p>
+    <table class="list outlook">
+      <thead><tr><th>Paddock</th><th class="num">AE/ha</th><th class="num">Now</th><th class="num">Low</th><th class="num">Median</th><th class="num">High</th></tr></thead>
+      <tbody>${stocked.map((x) => `
+        <tr class="row" data-paddock="${x.id}">
+          <td>${escapeHtml(names.get(x.id).name)}</td>
+          <td class="num muted">${x.ae_per_ha.toFixed(2)}</td>
+          <td class="num">${Math.round(x.now).toLocaleString("en-AU")}</td>
+          <td class="num ${x.days_left.low !== null && x.days_left.low < 30 ? "bad" : ""}">${daysText(x.days_left.low)}</td>
+          <td class="num"><b>${daysText(x.days_left.median)}</b></td>
+          <td class="num muted">${daysText(x.days_left.high)}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>` : ""}
+    <p class="muted tiny">Low, median and high are the 20th, 50th and 80th percentile of running the next six months with the weather of each of the ${o.years} years since 1890, from today's soil moisture. "180+" means it lasts beyond the six months.</p>
+    ${ctx.canEdit ? `<div class="row2 gap-top residual">
+      <label for="resid" class="small">Graze down to</label>
+      <input id="resid" type="number" min="200" max="4000" step="50" value="${R}" inputmode="numeric"> <span class="small muted">kg/ha</span>
+      <button class="btn" id="residSave">Save</button>
+    </div>` : ""}
+    ${f ? `<details class="gap-top"><summary class="small">How good is the model?</summary>
+      <p class="small">Fitted to ${f.intervals.toLocaleString("en-AU")} stretches of PastureKey readings against the stock records and SILO weather. Over ${f.lead} days its typical miss is <b>±${f.mae} kg/ha</b>, against ±${f.persistence_mae} for assuming nothing changes. Green pasture: ±${f.green_mae}.</p>
+      <p class="small muted">${f.set_aside} stretches were left out where Cibo's total rose with no growth and no rain, which standing grass can't do (dry 2026 winter). Intake is set at 8 kg of dry matter per AE a day, not fitted. It refits itself with every new PastureKey import, so it should sharpen as the record lengthens: one year is a short history.</p>
+    </details>` : ""}`;
+  host.querySelectorAll("[data-paddock]").forEach((tr) => { tr.onclick = () => ctx.select(Number(tr.dataset.paddock), true); });
+  const save = host.querySelector("#residSave");
+  if (save) save.onclick = async () => {
+    try {
+      await send("PUT", "/api/pasture/residual", { kg_ha: Number(host.querySelector("#resid").value) });
+      host.innerHTML = '<p class="muted small">Working out the outlook…</p>';
+      loadOutlook(host, ctx);
+    } catch (e) {
+      ctx.toast(e.message, { error: true });
+    }
+  };
 }

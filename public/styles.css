@@ -552,3 +552,8 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .trend.flat{color:var(--ink-3)}
 .pasturekey{display:flex;flex-wrap:wrap;gap:4px 12px;margin:6px 0 4px 24px}
 .pasturekey > span{display:inline-flex;align-items:center}
+table.outlook td,table.outlook th{padding:5px 6px}
+.residual{display:flex;align-items:center;gap:8px}
+.residual input{width:90px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;color:var(--ink)}
+.sw-outlook{width:12px;height:10px;background:rgba(25,158,112,.3);border-radius:2px}
+.legend [hidden]{display:none}

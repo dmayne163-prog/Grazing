@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
-import { addEvent, db } from "../db/database.js";
+import { addEvent, db, setSetting } from "../db/database.js";
+import { residual, type Outlook } from "../pasture/model.js";
+import { Worker } from "node:worker_threads";
 import { logger } from "../logger.js";
 import {
   ciboBoundary, commitCibo, commitPastureKey, coverage, farmReadings, paddockLatest, paddockSeries, parseCiboUpload,
@@ -34,6 +36,75 @@ pastureApi.get("/pasture", (_req, res) => {
 /** The newest PastureKey reading per paddock: the paddock list and the map use it. */
 pastureApi.get("/pasture/latest", (_req, res) => {
   res.json(paddockLatest());
+});
+
+/*
+ * The outlook takes a couple of seconds to work out, so it's kept until
+ * something it depends on changes: a reading, a stock record, the weather, the
+ * paddocks or the residual.
+ */
+let outlookCache: { key: string; value: Promise<Outlook | null> } | null = null;
+function outlook(): Promise<Outlook | null> {
+  const k = db.prepare(`
+    SELECT (SELECT MAX(updated_at) FROM pasture_obs) || '|' ||
+           (SELECT COUNT(*) || ':' || IFNULL(MAX(id), 0) FROM mob_events) || '|' ||
+           (SELECT IFNULL(MIN(last_date), '') FROM climate_cells) || '|' ||
+           (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), 0) || ':' || IFNULL(MAX(deleted_at), 0) FROM features WHERE kind = 'paddock') || '|' ||
+           (SELECT IFNULL(MAX(created_at), 0) FROM mobs) AS k
+  `).get() as { k: string };
+  const key = `${k.k}|${residual()}`;
+  if (outlookCache?.key !== key) {
+    const t0 = Date.now();
+    const value = inWorker().then((o) => {
+      log.info(`pasture outlook worked out in ${Date.now() - t0} ms`);
+      return o;
+    });
+    // A failure isn't kept: the next request tries again.
+    value.catch((e) => { log.error("pasture outlook failed", e); if (outlookCache?.value === value) outlookCache = null; });
+    outlookCache = { key, value };
+  }
+  return outlookCache.value;
+}
+
+function inWorker(): Promise<Outlook | null> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("../pasture/outlook-worker.js", import.meta.url));
+    w.once("message", (m: { ok: boolean; outlook?: Outlook | null; error?: string }) => {
+      void w.terminate();
+      if (m.ok) resolve(m.outlook ?? null); else reject(new Error(m.error));
+    });
+    w.once("error", reject);
+    w.postMessage("go");
+  });
+}
+
+/** The outlook for every paddock and the property, without the day-by-day bands. */
+pastureApi.get("/pasture/outlook", async (_req, res) => {
+  let o: Outlook | null;
+  try { o = await outlook(); } catch { res.status(500).json({ error: "The pasture outlook couldn't be worked out" }); return; }
+  if (!o) { res.json(null); return; }
+  res.json({
+    ...o,
+    fit: o.fit ? { ...o.fit, multipliers: undefined } : null,
+    paddocks: o.paddocks.map((p) => ({ ...p, series: undefined })),
+  });
+});
+
+/** One paddock's outlook, with its dry-to-wet bands, for its chart. */
+pastureApi.get("/pasture/outlook/:id", async (req, res) => {
+  let o: Outlook | null;
+  try { o = await outlook(); } catch { res.status(500).json({ error: "The pasture outlook couldn't be worked out" }); return; }
+  const p = o?.paddocks.find((x) => x.id === Number(req.params["id"]));
+  res.json(p ? { ...p, as_of: o!.as_of, residual: o!.residual, horizon: o!.horizon, years: o!.years } : null);
+});
+
+/** The cover to graze down to: what "days of grazing left" counts to. */
+pastureApi.put("/pasture/residual", requireAdmin, (req, res) => {
+  const v = Number((req.body ?? {})["kg_ha"]);
+  if (!Number.isFinite(v) || v < 200 || v > 4000) { res.status(400).json({ error: "Give the residual in kg/ha, between 200 and 4,000" }); return; }
+  setSetting("pasture_residual", String(Math.round(v)));
+  addEvent({ ts: Date.now(), source: "pasture", kind: "action", severity: "info", message: `${req.user?.username ?? null} set the pasture residual to ${Math.round(v)} kg/ha`, value: null });
+  res.json({ ok: true });
 });
 
 /** Every PastureKey reading for one paddock, oldest first. */

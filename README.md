@@ -12,9 +12,9 @@ Runs on Unraid next to tank-monitor, behind the same Cloudflare Access + app log
 |---|---|---|
 | 1 | **Farm map**: import from AgriWebb, draw and edit paddocks, fences, water points, gates; offline imagery | **done** |
 | 2 | **Mobs and movements**: mobs with head, class and weight → AE; moves, splits, merges, sales, deaths; record in the paddock offline | mob list + full AgriWebb movement history imported; paddock grazing & rest history; moves recorded in the app |
-| 3 | **Rainfall**: gauge records plus SILO. SILO back-fills **before 2020 only**; from 2020 on it is a comparison series against the gauges, never merged | gauge readings: AgriWebb import + entry in the app; SILO to come |
-| 4 | **Pasture and projections**: biomass in, growth from rain, intake out → days of grazing left, stocking rates, dry/median/wet outlooks | |
-| 5 | **Cibo Labs**: PastureKey biomass by file import, then by API once Cibo grants direct access | |
+| 3 | **Rainfall**: gauge records plus SILO. SILO back-fills **before 2020 only**; from 2020 on it is a comparison series against the gauges, never merged | gauge readings: AgriWebb import + entry in the app; SILO daily climate (1889 on) for the paddocks grid points, monthly comparison, deciles, yearly record |
+| 4 | **Pasture and projections**: biomass in, growth from rain, intake out → days of grazing left, stocking rates, dry/median/wet outlooks | green/dead pasture model fitted to PastureKey + stock records + SILO (`src/pasture/model.ts`); 6-month outlooks from every season since 1890; days to residual; long-term carrying capacity |
+| 5 | **Cibo Labs**: PastureKey biomass by file import, then by API once Cibo grants direct access | PastureKey paddock time series and the farm Pasture Biomass report imported from Cibo downloads; map layer, paddock charts |
 
 ### Before cancelling AgriWebb
 
