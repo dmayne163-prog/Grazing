@@ -18,7 +18,9 @@ import {
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
 import { getFeature } from "../map/store.js";
 import { parseSession, type ParsedSession } from "../animals/session.js";
-import { commitSession, planSession } from "../animals/store.js";
+import {
+  commitOptiweigh, commitSession, isOptiweigh, parseOptiweigh, planOptiweigh, planSession, type OptiweighRow,
+} from "../animals/store.js";
 import {
   commitHistory, historyAlreadyImported, planHistory, replayMovements,
 } from "../stock/agriwebb-history.js";
@@ -349,6 +351,16 @@ stockApi.post(
       return;
     }
     try {
+      // Optiweigh's raw individual weights: daily weights by EID from the walk-over unit.
+      if (/.csv$/i.test(filename) && isOptiweigh(req.body.toString("utf8", 0, 300))) {
+        const rows = parseOptiweigh(req.body.toString("utf8"));
+        const plan = planOptiweigh(rows);
+        const id = storePreview(req, filename, "optiweigh", { rows, filename });
+        const allMobs = mobViews().map((v) => ({ id: v.mob.id, name: v.mob.name, head: v.state.head, owner: v.mob.owner }))
+          .sort((x, y) => x.name.localeCompare(y.name));
+        res.json({ importId: id, type: "optiweigh", allMobs, ...plan });
+        return;
+      }
       // A CSV is a weighing session from the scales (Gallagher TSi, TWR-5, APS).
       if (/.csv$/i.test(filename)) {
         const session = parseSession(filename, req.body.toString("utf8"));
@@ -485,7 +497,7 @@ function storePreview(req: Request, filename: string, format: string, payload: u
 stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const row = db.prepare("SELECT * FROM imports WHERE id = ?").get(id) as ImportRow | undefined;
-  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || row.format === "gallagher-session")) {
+  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || row.format === "gallagher-session" || row.format === "optiweigh")) {
     res.status(404).json({ error: "That import has expired or was already used. Upload the file again." });
     return;
   }
@@ -499,7 +511,9 @@ stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
           ? commitRainfall(row, req.body, who(req))
           : row.format === "gallagher-session"
             ? commitSessionImport(row, req.body, who(req))
-            : commitPaddocks(row, who(req));
+            : row.format === "optiweigh"
+              ? commitOptiweighImport(row, req.body, who(req))
+              : commitPaddocks(row, who(req));
     db.prepare("UPDATE imports SET status = 'committed', committed_at = ? WHERE id = ?").run(Date.now(), id);
     addEvent({
       ts: Date.now(), source: "stock", kind: "import", severity: "info",
@@ -594,6 +608,22 @@ function commitRainfall(row: ImportRow, body: unknown, username: string | null) 
       summary: `${added} rain reading${added === 1 ? "" : "s"}${skipped ? ` (${skipped} already recorded, skipped)` : ""}`,
     };
   })();
+}
+
+function commitOptiweighImport(row: ImportRow, body: unknown, username: string | null) {
+  const { rows, filename } = JSON.parse(row.payload) as { rows: OptiweighRow[]; filename: string };
+  const b = (body ?? {}) as Record<string, unknown>;
+  const mob = b["mob_id"] === null || b["mob_id"] === undefined || b["mob_id"] === "" ? null : Number(b["mob_id"]);
+  try {
+    const r = commitOptiweigh(rows, { mob_id: mob, filename }, username);
+    return {
+      created: r.weighed, batch: r.batch,
+      summary: `Optiweigh: ${r.animals} animals (${r.created} new), ${r.weighed} weights, ${r.mob_weights} weekly mob weights`,
+    };
+  } catch (e) {
+    if (e instanceof StockError) throw new ImportError(e.message);
+    throw e;
+  }
 }
 
 function commitSessionImport(row: ImportRow, body: unknown, username: string | null) {

@@ -33,7 +33,7 @@
  */
 import { db, getSetting } from "../db/database.js";
 import { paddockCells } from "../climate/silo.js";
-import { aeFromWeight, allSegments, mobViews, today } from "../stock/store.js";
+import { aeFromWeight, allSegments, mobViews, today, voidedIds } from "../stock/store.js";
 
 /* --------------------------------- dates ---------------------------------- */
 
@@ -151,21 +151,56 @@ interface Inputs {
 }
 
 /**
- * AE per head for a mob on a given day. For now that's the mob's latest
- * weight (or, for mobs since sold, AgriWebb's figure, else 1 AE a head) for
- * every day. This is the one place an animal's weight on the day — Optiweigh,
- * the scales — will feed in, so intake follows the cattle as they grow.
+ * AE per head for a mob on a given day, so intake follows the cattle as they
+ * grow or lose weight. Where the mob has weighings — Optiweigh's weekly
+ * averages, the scales, an estimate — its weight on the day is read between
+ * them (flat before the first and after the last). A mob with none uses its
+ * current weight, or for one since sold AgriWebb's figure, else 1 AE a head.
  */
 function aePerHead(): (mobId: number, day: number) => number {
-  const byMob = new Map<number, number>();
-  for (const v of mobViews(today())) if (v.ae_head !== null) byMob.set(v.mob.id, v.ae_head);
+  const fallback = new Map<number, number>();
+  for (const v of mobViews(today())) if (v.ae_head !== null) fallback.set(v.mob.id, v.ae_head);
   for (const m of db.prepare("SELECT id, data FROM mobs").all() as Array<{ id: number; data: string }>) {
-    if (byMob.has(m.id)) continue;
+    if (fallback.has(m.id)) continue;
     const d = JSON.parse(m.data) as Record<string, unknown>;
     const w = typeof d["weight_kg"] === "number" ? aeFromWeight(d["weight_kg"]) : null;
-    byMob.set(m.id, w ?? (typeof d["agriwebb_ae_head"] === "number" ? d["agriwebb_ae_head"] : 1));
+    fallback.set(m.id, w ?? (typeof d["agriwebb_ae_head"] === "number" ? d["agriwebb_ae_head"] : 1));
   }
-  return (mobId) => byMob.get(mobId) ?? 1;
+
+  const voided = voidedIds();
+  const weighings = new Map<number, Array<{ day: number; kg: number }>>();
+  for (const r of db.prepare(
+    "SELECT id, mob_id, date, weight_kg FROM mob_events WHERE kind = 'weigh' AND weight_kg IS NOT NULL ORDER BY mob_id, date, id"
+  ).all() as Array<{ id: number; mob_id: number; date: string; weight_kg: number }>) {
+    if (voided.has(r.id)) continue;
+    const list = weighings.get(r.mob_id) ?? [];
+    const day = dayNo(r.date);
+    // Several on one day: the last recorded stands.
+    if (list.length && list[list.length - 1]!.day === day) list[list.length - 1]!.kg = r.weight_kg;
+    else list.push({ day, kg: r.weight_kg });
+    weighings.set(r.mob_id, list);
+  }
+
+  const memo = new Map<string, number>();
+  return (mobId, day) => {
+    const list = weighings.get(mobId);
+    if (!list?.length) return fallback.get(mobId) ?? 1;
+    const key = `${mobId}|${day}`;
+    const hit = memo.get(key);
+    if (hit !== undefined) return hit;
+    let kg: number;
+    if (day <= list[0]!.day) kg = list[0]!.kg;
+    else if (day >= list[list.length - 1]!.day) kg = list[list.length - 1]!.kg;
+    else {
+      let i = 1;
+      while (list[i]!.day < day) i++;
+      const a = list[i - 1]!, b = list[i]!;
+      kg = a.kg + ((b.kg - a.kg) * (day - a.day)) / (b.day - a.day);
+    }
+    const ae = aeFromWeight(kg) ?? fallback.get(mobId) ?? 1;
+    memo.set(key, ae);
+    return ae;
+  };
 }
 
 function loadInputs(): Inputs | null {

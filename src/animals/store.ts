@@ -556,3 +556,189 @@ export function commitSession(
     return { batch, session_id: sid, created, weighed };
   })();
 }
+
+/* -------------------------------- Optiweigh -------------------------------- */
+
+/**
+ * Optiweigh's raw individual data ("individuals_raw_data_….csv"): one row per
+ * animal per day it walked over the unit — date, EID, visual ID (often blank)
+ * and the day's weight. The download is cumulative, so importing a newer one
+ * only adds what's new.
+ */
+export interface OptiweighRow { date: string; eid: string; vid: string | null; kg: number }
+
+export function isOptiweigh(text: string): boolean {
+  return /^\s*date\s*,\s*eid\s*,\s*vid\s*,\s*weight/i.test(text.slice(0, 200));
+}
+
+export function parseOptiweigh(text: string): OptiweighRow[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const head = (lines[0] ?? "").split(",").map((h) => h.trim().toLowerCase());
+  const at = (re: RegExp) => head.findIndex((h) => re.test(h));
+  const iDate = at(/^date$/), iEid = at(/^eid$/), iVid = at(/^vid$/), iKg = at(/^weight/);
+  if (iDate < 0 || iEid < 0 || iKg < 0) throw new StockError("This isn't Optiweigh's raw data: it needs date, eid and weight columns");
+  const out: OptiweighRow[] = [];
+  for (const line of lines.slice(1)) {
+    const c = line.split(",");
+    const date = (c[iDate] ?? "").trim();
+    const eid = (c[iEid] ?? "").replace(/\D/g, "");
+    const kg = Number(c[iKg]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || eid.length < 10 || !Number.isFinite(kg) || kg <= 0 || kg > 1500) continue;
+    const vid = iVid >= 0 ? (c[iVid] ?? "").trim() : "";
+    out.push({ date, eid, vid: vid || null, kg: Math.round(kg * 10) / 10 });
+  }
+  if (!out.length) throw new StockError("No weights in this file");
+  return out;
+}
+
+const weekOf = (d: string) => {
+  const t = new Date(`${d}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() - ((t.getUTCDay() + 6) % 7));
+  return t.toISOString().slice(0, 10);
+};
+const median = (xs: number[]) => {
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+};
+/** Weeks with fewer animals over the unit than this don't set the mob's weight. */
+const MIN_WEEK_HEAD = 15;
+
+/** Each week: the animals over the unit, each with its weights that week, and the week's last day weighed. */
+function weeksOf(rows: OptiweighRow[]): Array<{ week: string; last: string; animals: Map<string, number[]> }> {
+  const weeks = new Map<string, { week: string; last: string; animals: Map<string, number[]> }>();
+  for (const r of rows) {
+    const k = weekOf(r.date);
+    const w = weeks.get(k) ?? { week: k, last: r.date, animals: new Map<string, number[]>() };
+    w.animals.set(r.eid, [...(w.animals.get(r.eid) ?? []), r.kg]);
+    if (r.date > w.last) w.last = r.date;
+    weeks.set(k, w);
+  }
+  return [...weeks.values()].sort((a, b) => a.week.localeCompare(b.week));
+}
+
+/**
+ * The mob's daily gain at a week, from the same animals weighed three to six
+ * weeks earlier: each animal's change over the days between, averaged. A
+ * different handful walks over the unit each week, so comparing two weeks'
+ * medians would mostly measure who turned up.
+ */
+function pairedGain(w: { last: string; animals: Map<string, number[]> }, weeks: Array<{ last: string; animals: Map<string, number[]> }>): number | null {
+  const day = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+  const earlier = weeks.filter((x) => day(w.last) - day(x.last) >= 21 && day(w.last) - day(x.last) <= 42)
+    .sort((a, b) => day(b.last) - day(a.last))[0];
+  if (!earlier) return null;
+  const days = day(w.last) - day(earlier.last);
+  const gains: number[] = [];
+  for (const [eid, kgs] of w.animals) {
+    const before = earlier.animals.get(eid);
+    if (before) gains.push((median(kgs) - median(before)) / days);
+  }
+  if (gains.length < 10) return null;
+  return Math.round((gains.reduce((t, g) => t + g, 0) / gains.length) * 100) / 100;
+}
+
+export function planOptiweigh(rows: OptiweighRow[]) {
+  const byEid = new Map<string, OptiweighRow[]>();
+  for (const r of rows) byEid.set(r.eid, [...(byEid.get(r.eid) ?? []), r]);
+  const dates = rows.map((r) => r.date).sort();
+  const known = new Map<number, number>(); // mob → animals already in it
+  let existing = 0, newWeights = 0;
+  for (const [eid, list] of byEid) {
+    const a = db.prepare("SELECT id FROM animals WHERE eid = ?").get(eid) as { id: number } | undefined;
+    if (a) {
+      existing++;
+      const m = currentMob(eventsOf(a.id));
+      if (m !== null) known.set(m, (known.get(m) ?? 0) + 1);
+      for (const r of list) {
+        if (!db.prepare("SELECT 1 FROM animal_events WHERE animal_id = ? AND kind = 'weigh' AND date = ? AND weight_kg = ?").get(a.id, r.date, r.kg)) newWeights++;
+      }
+    } else newWeights += list.length;
+  }
+  const full = weeksOf(rows).filter((w) => w.animals.size >= MIN_WEEK_HEAD);
+  const recent = full.length ? full[full.length - 1]! : null;
+  const recentKg = recent ? Math.round(median([...recent.animals.values()].map(median))) : null;
+
+  // Which mob: one the animals are already in; else one with at least as many
+  // head as there are animals, closest in weight.
+  const n = byEid.size;
+  const suggestions = mobViews().map((v) => {
+    const reasons: string[] = [];
+    let score = 0;
+    const inIt = known.get(v.mob.id) ?? 0;
+    if (inIt) { score += 100 * inIt / n; reasons.push(`${inIt} of these animals are already in it`); }
+    if (v.state.head >= n * 0.9) { score += 20; reasons.push(`${v.state.head} head, enough for the ${n} animals weighed`); }
+    const w = v.state.est_weight_kg;
+    if (recentKg !== null && w !== null && Math.abs(w - recentKg) <= 60) {
+      score += 30 - Math.abs(w - recentKg) / 2;
+      reasons.push(`${Math.round(w)} kg on record; Optiweigh's latest week ${recentKg} kg`);
+    }
+    if (v.mob.owner) reasons.push(`agisted (${v.mob.owner})`);
+    return { mob_id: v.mob.id, name: v.mob.name, head: v.state.head, weight_kg: w, reasons, score: Math.round(score) };
+  }).filter((s) => s.score >= 25).sort((a, b) => b.score - a.score).slice(0, 5);
+
+  return {
+    animals: n, existing, new_animals: n - existing, weights: rows.length, new_weights: newWeights,
+    from: dates[0]!, to: dates[dates.length - 1]!,
+    weeks: full.length,
+    latest_week: recent ? { week: recent.week, head: recent.animals.size, median_kg: recentKg } : null,
+    suggestions,
+  };
+}
+
+/**
+ * Brings the weights in: animals the app hasn't met are created and put in
+ * the chosen mob from their first day on the unit; every day's weight goes on
+ * its animal; and each week with enough animals over the unit sets the mob's
+ * average weight (the median of the animals weighed that week), recorded as an
+ * Optiweigh weighing with how many it rests on. One batch: one Undo.
+ */
+export function commitOptiweigh(rows: OptiweighRow[], opts: { mob_id: number | null; filename: string }, username: string | null) {
+  if (opts.mob_id !== null && !db.prepare("SELECT 1 FROM mobs WHERE id = ?").get(opts.mob_id)) throw new StockError("No such mob");
+  const batch = randomUUID();
+  const now = Date.now();
+  const source = "optiweigh";
+  return db.transaction(() => {
+    const byEid = new Map<string, OptiweighRow[]>();
+    for (const r of rows) byEid.set(r.eid, [...(byEid.get(r.eid) ?? []), r]);
+    let created = 0, weighed = 0;
+    for (const [eid, listRaw] of byEid) {
+      const list = [...listRaw].sort((a, b) => a.date.localeCompare(b.date));
+      let a = db.prepare("SELECT * FROM animals WHERE eid = ?").get(eid) as AnimalRow | undefined;
+      if (!a) {
+        const id = Number(db.prepare(`
+          INSERT INTO animals (eid, tag, nlis, data, source, batch, created_at, updated_at)
+          VALUES (?, ?, NULL, '{}', ?, ?, ?, ?)
+        `).run(eid, list.find((r) => r.vid)?.vid ?? null, source, batch, now, now).lastInsertRowid);
+        a = db.prepare("SELECT * FROM animals WHERE id = ?").get(id) as AnimalRow;
+        created++;
+        if (opts.mob_id !== null) addAnimalEvent(a.id, { date: list[0]!.date, kind: "join", mob_id: opts.mob_id }, source, username, batch);
+      }
+      for (const r of list) {
+        if (db.prepare("SELECT 1 FROM animal_events WHERE animal_id = ? AND kind = 'weigh' AND date = ? AND weight_kg = ?").get(a.id, r.date, r.kg)) continue;
+        addAnimalEvent(a.id, { date: r.date, kind: "weigh", weight_kg: r.kg, data: { device: "optiweigh" } }, source, username, batch);
+        weighed++;
+      }
+    }
+
+    let mobWeights = 0;
+    if (opts.mob_id !== null) {
+      const first = (db.prepare("SELECT MIN(date) d FROM mob_events WHERE mob_id = ?").get(opts.mob_id) as { d: string | null }).d;
+      const weeks = weeksOf(rows);
+      for (const w of weeks) {
+        if (w.animals.size < MIN_WEEK_HEAD || (first && w.last < first)) continue;
+        const dup = db.prepare(
+          "SELECT 1 FROM mob_events WHERE mob_id = ? AND kind = 'weigh' AND date = ? AND json_extract(data, '$.method') = 'optiweigh'"
+        ).get(opts.mob_id, w.last);
+        if (dup) continue;
+        const kg = Math.round(median([...w.animals.values()].map(median)) * 10) / 10;
+        const e: EventInput = {
+          date: w.last, kind: "weigh", weight_kg: kg, adg_kg: pairedGain(w, weeks),
+          data: { method: "optiweigh", head_weighed: w.animals.size, note: `Optiweigh: median of the ${w.animals.size} animals over the unit that week` },
+        };
+        addEvent(opts.mob_id, e, "app", username, batch);
+        mobWeights++;
+      }
+    }
+    return { batch, created, weighed, mob_weights: mobWeights, animals: byEid.size };
+  })();
+}

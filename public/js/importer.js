@@ -30,8 +30,14 @@ const PICKERS = {
     accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv",
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
-      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).<br>
+      Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv), or Optiweigh's raw individual data (.csv).<br>
       Pasture: a Cibo Labs download (.zip): the farm's Pasture Biomass report, or PastureKey's paddock readings.`,
+  },
+  optiweigh: {
+    title: "Import Optiweigh weights",
+    accept: ".csv",
+    help: `Optiweigh's raw individual data (individuals_raw_data_….csv), from the Optiweigh portal.<br>
+      Every animal's daily weights come in by EID; the download is cumulative, so importing a newer one just adds what's new.`,
   },
   pasture: {
     title: "Import a Cibo Labs pasture report",
@@ -116,6 +122,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         else if (preview.type === "movements") showMovementReview(file.name, preview);
         else if (preview.type === "rainfall") showRainReview(file.name, preview);
         else if (preview.type === "session") showSessionReview(file.name, preview);
+        else if (preview.type === "optiweigh") showOptiweighReview(file.name, preview);
         else showPaddockCheck(file.name, preview);
         return;
       }
@@ -636,6 +643,55 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         const res = await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
         dialog.close();
         onDone(`Imported PastureKey: ${res.added.toLocaleString("en-AU")} new readings${res.updated ? `, ${res.updated.toLocaleString("en-AU")} refreshed` : ""}`);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  /* --------------------------- step 2: Optiweigh ---------------------------- */
+
+  function showOptiweighReview(filename, p) {
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    const best = p.suggestions[0]?.mob_id ?? "";
+    const suggested = new Set(p.suggestions.map((s) => s.mob_id));
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review Optiweigh weights</h2>
+          <div class="muted small">${escapeHtml(filename)} · ${p.weights.toLocaleString("en-AU")} weights · ${p.animals} animals · ${fmt(p.from)} to ${fmt(p.to)}</div>
+        </header>
+        <div class="body">
+          <p>${p.new_weights.toLocaleString("en-AU")} new weight${p.new_weights === 1 ? "" : "s"}${p.weights - p.new_weights ? `; ${(p.weights - p.new_weights).toLocaleString("en-AU")} already in the app are skipped` : ""}.
+            ${p.existing ? `${p.existing} of the animals are already known by EID.` : ""}</p>
+          ${p.latest_week ? `<p class="small">Latest week: <b>${p.latest_week.median_kg} kg</b> median across the ${p.latest_week.head} animals over the unit.</p>` : ""}
+          ${p.new_animals ? `
+          <div class="f"><label for="owMob">${p.new_animals} animal${p.new_animals === 1 ? " isn't" : "s aren't"} in the app yet. Put ${p.new_animals === 1 ? "it" : "them"} in</label>
+            <select id="owMob">
+              ${p.suggestions.length ? `<optgroup label="Most likely">${p.suggestions.map((s) => `<option value="${s.mob_id}"${s.mob_id === best ? " selected" : ""}>${escapeHtml(s.name)} · ${s.head} hd</option>`).join("")}</optgroup>` : ""}
+              <optgroup label="Every mob">${p.allMobs.filter((m) => !suggested.has(m.id)).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</optgroup>
+              <option value="">No mob: just keep their weights</option>
+            </select>
+          </div>
+          ${p.suggestions[0] ? `<p class="muted tiny">Suggested because: ${escapeHtml(p.suggestions[0].reasons.join("; "))}.</p>` : ""}` : ""}
+          <p class="muted small gap-top">The mob also gets an Optiweigh weight for each of the ${p.weeks} weeks with ${15} or more animals over the unit: the median of the animals weighed that week, noting how many. That keeps its weight and gain current, and the pasture model uses it for intake. Optiweigh only weighs the animals that walk over it, so it's a sample of the mob, not all of it.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      const sel = dialog.querySelector("#owMob");
+      try {
+        const res = await send("POST", `/api/import/records/${p.importId}/commit`, { mob_id: sel && sel.value ? Number(sel.value) : null });
+        dialog.close();
+        onDone(`Imported ${res.summary}`, res.batch);
       } catch (e) {
         btn.disabled = false;
         dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);

@@ -574,6 +574,7 @@ function toolsHtml() {
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
         <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>PastureKey paddock readings, or the farm Pasture Biomass report (.zip)</span></button>
+        <button class="btn" data-import="optiweigh"><b>Import Optiweigh weights…</b><span>The raw individual data from the Optiweigh portal (.csv)</span></button>
         <button class="btn" id="findGates"><b>Find gates that were probably left open…</b><span>From the pasture readings, for the time before this app (AgriWebb kept no gate records)</span></button>
       </div>
     ` : ""}
