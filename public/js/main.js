@@ -4,11 +4,11 @@ import { Editor } from "./editor.js";
 import { openImport } from "./importer.js";
 import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
-import { renderPasture } from "./pasture.js";
+import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
-import { escapeHtml, FarmMap, featureAt, kindColour, localGet, localSet } from "./map.js";
+import { escapeHtml, FarmMap, featureAt, kindColour, localGet, localSet, PASTURE_BINS, pastureColour } from "./map.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -29,6 +29,8 @@ const state = {
   /** Rest and use per paddock id, and when the stock records begin. */
   grazing: new Map(),
   recordsBegin: null,
+  /** The latest Cibo PastureKey reading per paddock id. */
+  pasture: new Map(),
   gates: [],
   /** An individual animal open in the panel, if any. */
   selectedAnimalId: null,
@@ -92,9 +94,12 @@ async function loadFeatures() {
 
 async function loadStock() {
   try {
-    const [mobs, stock, grazing, gates] = await Promise.all([
+    const [mobs, stock, grazing, gates, pasture] = await Promise.all([
       get("/api/mobs"), get("/api/stock"), get("/api/grazing"), get("/api/gates"),
+      get("/api/pasture/latest").catch(() => []),
     ]);
+    state.pasture = new Map(pasture.map((p) => [p.feature_id, p]));
+    paintPasture();
     state.mobs = mobs;
     state.stock = new Map(stock.map((s) => [s.paddock_id, s]));
     state.grazing = new Map(grazing.paddocks.map((g) => [g.paddock_id, g]));
@@ -104,6 +109,12 @@ async function loadStock() {
   } catch {
     // The map is still worth showing without the stock on it.
   }
+}
+
+/** The pasture colouring on the map, when it's switched on in Layers. */
+function paintPasture() {
+  const on = localGet("pastureLayer") === "1" && state.pasture.size > 0;
+  farm.setPasture(on ? new Map([...state.pasture].map(([id, p]) => [id, pastureColour(p.tsdm)])) : null);
 }
 
 const mobById = (id) => state.mobs.find((m) => m.id === id);
@@ -452,7 +463,8 @@ function paddockTable(paddocks) {
   if (paddocks.length === 0) return "";
   const { key, dir } = state.sort;
   const head = (f) => state.stock.get(f.id)?.head || 0;
-  const val = (f) => key === "ha" ? grazable(f) || 0 : key === "head" ? head(f) : key === "rest" ? restOf(f.id) ?? -2 : key === "type" ? f.properties.subtype || "" : f.properties.name;
+  const val = (f) => key === "ha" ? grazable(f) || 0 : key === "head" ? head(f) : key === "rest" ? restOf(f.id) ?? -2
+    : key === "pasture" ? state.pasture.get(f.id)?.tsdm ?? -1 : key === "type" ? f.properties.subtype || "" : f.properties.name;
   const rows = [...paddocks].sort((a, b) => {
     const x = val(a), y = val(b);
     return (typeof x === "number" ? x - y : String(x).localeCompare(String(y), "en", { numeric: true })) * dir;
@@ -466,6 +478,7 @@ function paddockTable(paddocks) {
         <th data-sort="ha" class="num">Area${arrow("ha")}</th>
         <th data-sort="head" class="num">Head${arrow("head")}</th>
         ${state.grazing.size ? `<th data-sort="rest" class="num" title="Days since last grazed">Rest${arrow("rest")}</th>` : ""}
+        ${state.pasture.size ? `<th data-sort="pasture" class="num" title="Pasture, kg dry matter a hectare (Cibo PastureKey)">Pasture${arrow("pasture")}</th>` : ""}
       </tr></thead>
       <tbody>${rows.map((f) => `
         <tr class="row" data-id="${f.id}">
@@ -474,9 +487,17 @@ function paddockTable(paddocks) {
           <td class="num">${ha(grazable(f))}</td>
           <td class="num">${head(f) || (state.stock.get(f.id)?.ae_per_ha ? '<span class="muted">shared</span>' : "")}</td>
           ${state.grazing.size ? `<td class="num">${restLabel(f.id)}</td>` : ""}
+          ${state.pasture.size ? `<td class="num">${pastureCell(f.id)}</td>` : ""}
         </tr>`).join("")}
       </tbody>
     </table>`;
+}
+
+function pastureCell(id) {
+  const p = state.pasture.get(id);
+  if (!p) return "";
+  const t = trendWord(p.change_rate);
+  return `${nf0.format(p.tsdm)}<span class="trend ${t.cls}" title="${t.word}, ${nf1.format(p.change_rate ?? 0)} kg/ha a day">${t.arrow}</span>`;
 }
 
 function waterTable(water) {
@@ -531,6 +552,12 @@ function layersHtml() {
         Mobs
         <span class="count">${state.mobs.length}</span>
       </label>
+    ${state.pasture.size ? `
+      <div class="layers gap-top"><label>
+        <input type="checkbox" data-pasture ${localGet("pastureLayer") === "1" ? "checked" : ""}>
+        Colour paddocks by pasture
+      </label></div>
+      <div class="pasturekey small">${PASTURE_BINS.map((b) => `<span><span class="swatch" data-colour="${b.colour}"></span>${b.label}</span>`).join("")}<span class="muted">kg/ha · Cibo PastureKey, ${shortDay([...state.pasture.values()][0].date)}</span></div>` : ""}
     <p class="muted small gap-top"><span class="swatch" data-colour="#5FBE8E"></span>A green outline marks paddocks open into each other; green gates are open.</p>
     <p class="muted small">Imagery is chosen with the layers button at the bottom-left of the map.</p>`;
 }
@@ -545,7 +572,7 @@ function toolsHtml() {
         <button class="btn" data-import="session"><b>Import a cattle session…</b><span>From the scales: Gallagher TSi, TWR-5 or APS (.csv)</span></button>
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
-        <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>The Pasture Biomass report Cibo emails (.zip)</span></button>
+        <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>PastureKey paddock readings, or the farm Pasture Biomass report (.zip)</span></button>
       </div>
     ` : ""}
 
@@ -614,6 +641,11 @@ function bindOverview() {
   if (mobsToggle) mobsToggle.onchange = () => {
     localSet("hideMobs", mobsToggle.checked ? "0" : "1");
     mobLayer.setVisible(mobsToggle.checked);
+  };
+  const pastureToggle = $("[data-pasture]", body);
+  if (pastureToggle) pastureToggle.onchange = () => {
+    localSet("pastureLayer", pastureToggle.checked ? "1" : "0");
+    paintPasture();
   };
   paintSwatches(body);
 
@@ -826,6 +858,7 @@ function featureHtml(f) {
     ${isGate(f) ? gatePanelHtml() : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${p.kind === "paddock" ? stockHtml(f) : ""}
+    ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture · Cibo PastureKey</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
     ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
     ${readOnly}
     ${canEdit() ? `
@@ -849,6 +882,8 @@ function bindFeature(f) {
   });
   $("#back").onclick = () => select(null);
   if (f.properties.kind === "paddock") loadGrazing(f);
+  const pp = $("#paddockPasture");
+  if (pp) renderPaddockPasture(pp, f.id, grazable(f) || f.properties.area_ha || 0, () => state.selectedId === f.id);
   if (isGate(f)) loadGatePanel(ctx, f, body);
   loadHistory(f.id);
   if (!canEdit()) return;

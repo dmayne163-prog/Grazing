@@ -545,3 +545,10 @@ label.radio .muted{margin-left:auto;padding-left:8px;white-space:nowrap}
 .sw-pasture{width:14px;height:2px;border-radius:1px;background:#199e70}
 .sw-pasture-band{width:12px;height:10px;background:rgba(25,158,112,.22);border-radius:2px}
 .sw-ref{width:14px;height:0;border-top:2px dashed #A3B1B7;border-radius:0}
+.sw-grazed{width:12px;height:10px;background:rgba(163,177,183,.3);border-radius:2px}
+.trend{margin-left:4px;font-weight:700}
+.trend.up{color:var(--good)}
+.trend.down{color:var(--warn)}
+.trend.flat{color:var(--ink-3)}
+.pasturekey{display:flex;flex-wrap:wrap;gap:4px 12px;margin:6px 0 4px 24px}
+.pasturekey > span{display:inline-flex;align-items:center}

@@ -66,15 +66,88 @@ function parseTsdmCsv(text: string): FarmReading[] {
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export function parseCiboUpload(filename: string, buf: Buffer): CiboReport {
-  if (/\.csv$/i.test(filename)) return { readings: parseTsdmCsv(buf.toString("utf8")), boundary: null };
-  if (!/\.zip$/i.test(filename)) throw new PastureError("Choose the .zip Cibo Labs sends, or the _tsdm_report.csv inside it.");
+/* ------------------------------ PastureKey ------------------------------ */
+
+/**
+ * One PastureKey reading for one paddock. PastureKey estimates every paddock
+ * every five days or so; on a cloudy pass "captured" is low and the figure
+ * leans on the model more than on what the satellite saw.
+ */
+export interface PaddockReading {
+  paddock: string;
+  area_ha: number | null;
+  date: string;
+  tsdm: number;
+  error: number | null;
+  change_rate: number | null;
+  captured_pct: number | null;
+  green: number | null;
+  green_change_rate: number | null;
+}
+
+const isPastureKeyHeader = (h: string) => /^paddock,farm,area,/i.test(h.trim());
+
+/**
+ * PastureKey's paddock time series ("PaddocksTsdmTimeSeriesAll"): one row per
+ * paddock, and for each pass a group of columns suffixed with its date —
+ * median_20260926, median_error_20260926, change_rate_…, captured_…,
+ * greenmedian_…, green_change_rate_…. Passes with no estimate are left empty.
+ */
+function parsePastureKeyCsv(text: string): PaddockReading[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const head = (lines[0] ?? "").split(",").map((h) => h.trim().toLowerCase());
+  const col = new Map(head.map((h, i) => [h, i]));
+  const dates = head.filter((h) => /^median_\d{8}$/.test(h)).map((h) => h.slice(7));
+  const out: PaddockReading[] = [];
+  for (const line of lines.slice(1)) {
+    const c = line.split(",");
+    const paddock = (c[col.get("paddock")!] ?? "").trim();
+    if (!paddock) continue;
+    const area = Number(c[col.get("area")!]);
+    const n = (name: string) => {
+      const i = col.get(name);
+      if (i === undefined || (c[i] ?? "").trim() === "") return null;
+      const v = Number(c[i]);
+      return Number.isFinite(v) ? v : null;
+    };
+    for (const d of dates) {
+      const tsdm = n(`median_${d}`);
+      if (tsdm === null) continue;
+      const r1 = (v: number | null) => (v === null ? null : Math.round(v * 10) / 10);
+      out.push({
+        paddock, area_ha: Number.isFinite(area) ? area : null,
+        date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`,
+        tsdm, error: n(`median_error_${d}`), change_rate: r1(n(`change_rate_${d}`)),
+        captured_pct: n(`captured_${d}`), green: n(`greenmedian_${d}`), green_change_rate: r1(n(`green_change_rate_${d}`)),
+      });
+    }
+  }
+  if (!out.length) throw new PastureError("No paddock readings in this file.");
+  return out;
+}
+
+export type CiboUpload =
+  | ({ kind: "farm-report" } & CiboReport)
+  | { kind: "pasturekey"; readings: PaddockReading[] };
+
+/** Either Cibo download: the farm report, or PastureKey's paddock time series. */
+export function parseCiboUpload(filename: string, buf: Buffer): CiboUpload {
+  if (/\.csv$/i.test(filename)) {
+    const text = buf.toString("utf8");
+    return isPastureKeyHeader(text.slice(0, 200))
+      ? { kind: "pasturekey", readings: parsePastureKeyCsv(text) }
+      : { kind: "farm-report", readings: parseTsdmCsv(text), boundary: null };
+  }
+  if (!/\.zip$/i.test(filename)) throw new PastureError("Choose the .zip Cibo Labs sends, or a .csv from inside it.");
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(new Uint8Array(buf));
   } catch {
     throw new PastureError("That zip file couldn't be opened.");
   }
+  // PastureKey splits its time series into a CSV per year.
+  const pk = Object.entries(files).filter(([n, b]) => /\.csv$/i.test(n) && isPastureKeyHeader(strFromU8(b.subarray(0, 200))));
+  if (pk.length) return { kind: "pasturekey", readings: pk.flatMap(([, b]) => parsePastureKeyCsv(strFromU8(b))) };
   const csvName = Object.keys(files).find((n) => /tsdm_report\.csv$/i.test(n));
   if (!csvName) {
     const hint = Object.keys(files).some((n) => /farm-key/i.test(n))
@@ -93,7 +166,103 @@ export function parseCiboUpload(filename: string, buf: Buffer): CiboReport {
       if (g && (g.type === "Polygon" || g.type === "MultiPolygon")) boundary = g;
     } catch { /* the readings are what matter; the boundary is a bonus */ }
   }
-  return { readings, boundary };
+  return { kind: "farm-report", readings, boundary };
+}
+
+const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Which app paddock each PastureKey paddock name is. */
+function paddockIndex(): Map<string, { id: number; name: string; area_ha: number | null }> {
+  const rows = db.prepare("SELECT id, name, area_ha FROM features WHERE kind = 'paddock' AND deleted_at IS NULL")
+    .all() as Array<{ id: number; name: string; area_ha: number | null }>;
+  return new Map(rows.map((r) => [norm(r.name), r]));
+}
+
+const PK = "cibo-pasturekey";
+
+export function previewPastureKey(readings: PaddockReading[]) {
+  const index = paddockIndex();
+  const names = [...new Set(readings.map((r) => r.paddock))];
+  const unmatched = names.filter((n) => !index.has(norm(n)));
+  const areaOff = names.flatMap((n) => {
+    const p = index.get(norm(n));
+    const r = readings.find((x) => x.paddock === n)!;
+    if (!p || !p.area_ha || !r.area_ha) return [];
+    const off = (r.area_ha - p.area_ha) / p.area_ha;
+    return Math.abs(off) > 0.05 ? [{ name: p.name, app_ha: Math.round(p.area_ha), cibo_ha: Math.round(r.area_ha) }] : [];
+  });
+  const have = new Set((db.prepare("SELECT feature_id || '|' || date AS k FROM pasture_obs WHERE source = ?").all(PK) as Array<{ k: string }>).map((x) => x.k));
+  let fresh = 0, matchedReadings = 0;
+  for (const r of readings) {
+    const p = index.get(norm(r.paddock));
+    if (!p) continue;
+    matchedReadings++;
+    if (!have.has(`${p.id}|${r.date}`)) fresh++;
+  }
+  const dates = [...new Set(readings.map((r) => r.date))].sort();
+  return {
+    kind: "pasturekey" as const,
+    paddocks: names.length,
+    matched: names.length - unmatched.length,
+    unmatched,
+    area_off: areaOff,
+    passes: dates.length,
+    from: dates[0]!,
+    to: dates[dates.length - 1]!,
+    readings: matchedReadings,
+    new: fresh,
+    updated: matchedReadings - fresh,
+  };
+}
+
+export function commitPastureKey(readings: PaddockReading[], filename: string): { added: number; updated: number; skipped: number } {
+  const p = previewPastureKey(readings);
+  const index = paddockIndex();
+  const now = Date.now();
+  const up = db.prepare(`
+    INSERT INTO pasture_obs (feature_id, date, source, tsdm_p50, tsdm_error, change_rate, captured_pct, green, green_change_rate,
+      import_file, created_at, updated_at)
+    VALUES (@fid, @date, '${PK}', @tsdm, @error, @change_rate, @captured_pct, @green, @green_change_rate, @file, @now, @now)
+    ON CONFLICT(feature_id, date, source) DO UPDATE SET
+      tsdm_p50 = excluded.tsdm_p50, tsdm_error = excluded.tsdm_error, change_rate = excluded.change_rate,
+      captured_pct = excluded.captured_pct, green = excluded.green, green_change_rate = excluded.green_change_rate,
+      import_file = excluded.import_file, updated_at = excluded.updated_at
+  `);
+  let skipped = 0;
+  db.transaction(() => {
+    for (const r of readings) {
+      const pad = index.get(norm(r.paddock));
+      if (!pad) { skipped++; continue; }
+      up.run({ fid: pad.id, date: r.date, tsdm: r.tsdm, error: r.error, change_rate: r.change_rate, captured_pct: r.captured_pct,
+        green: r.green, green_change_rate: r.green_change_rate, file: filename, now });
+    }
+  })();
+  return { added: p.new, updated: p.updated, skipped };
+}
+
+export interface PaddockLatest {
+  feature_id: number; date: string; tsdm: number; error: number | null; green: number | null;
+  change_rate: number | null; captured_pct: number | null; month_ago: number | null;
+}
+
+/** The newest PastureKey reading for each paddock, with the reading about a month before it. */
+export function paddockLatest(): PaddockLatest[] {
+  const rows = db.prepare(`
+    SELECT o.feature_id, o.date, o.tsdm_p50 AS tsdm, o.tsdm_error AS error, o.green, o.change_rate, o.captured_pct,
+      (SELECT p.tsdm_p50 FROM pasture_obs p WHERE p.feature_id = o.feature_id AND p.source = o.source
+         AND p.date <= date(o.date, '-28 days') ORDER BY p.date DESC LIMIT 1) AS month_ago
+    FROM pasture_obs o
+    WHERE o.source = ? AND o.feature_id != 0
+      AND o.date = (SELECT MAX(date) FROM pasture_obs m WHERE m.feature_id = o.feature_id AND m.source = o.source)
+  `).all(PK) as PaddockLatest[];
+  return rows;
+}
+
+export function paddockSeries(featureId: number) {
+  return db.prepare(`
+    SELECT date, tsdm_p50 AS tsdm, tsdm_error AS error, green, change_rate, captured_pct
+    FROM pasture_obs WHERE feature_id = ? AND source = ? ORDER BY date
+  `).all(featureId, PK);
 }
 
 /** What importing this report would change. */

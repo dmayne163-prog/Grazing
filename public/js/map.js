@@ -55,6 +55,8 @@ function pathStyle(f, selected) {
       // group's outside fence is drawn green (see outsideEdges); the fences
       // inside it keep their ordinary colour.
       if (openGroup.has(f.id)) Object.assign(s, { fillColor: OPEN, fillOpacity: 0.16 });
+      // Coloured by pasture, when that layer is on; it takes over the fill.
+      if (pastureFill?.has(f.id)) Object.assign(s, { fillColor: pastureFill.get(f.id), fillOpacity: 0.6 });
       break;
     case "boundary":
       s = { color: colour, weight: 3, dashArray: "10 6", fill: false };
@@ -91,6 +93,24 @@ function pathStyle(f, selected) {
 
 /** Gate id → "open" | "closed", set from the server. */
 let gateStates = new Map();
+
+/** Paddock id → fill colour for its pasture, or null when that layer is off. */
+let pastureFill = null;
+
+/**
+ * Pasture bins, kg of dry matter a hectare, and a one-hue green ramp for
+ * them: light is little feed, dark is plenty. Validated as an ordinal ramp
+ * (monotone lightness, visible steps, single hue).
+ */
+export const PASTURE_BINS = [
+  { below: 500, colour: "#d6f2e4", label: "under 500" },
+  { below: 1000, colour: "#a3dfc2", label: "500–1,000" },
+  { below: 1500, colour: "#68c69b", label: "1,000–1,500" },
+  { below: 2000, colour: "#2fa974", label: "1,500–2,000" },
+  { below: 3000, colour: "#16865a", label: "2,000–3,000" },
+  { below: Infinity, colour: "#0b5f40", label: "3,000 and over" },
+];
+export const pastureColour = (kg) => PASTURE_BINS.find((b) => kg < b.below).colour;
 
 /** Paddock id → the other paddocks it is open into. */
 let openGroup = new Map();
@@ -298,6 +318,16 @@ export class FarmMap {
     gateStates = new Map(list.map((g) => [g.gate_id, g.state]));
     for (const layer of this.layersById.values()) {
       if ((layer.feature.properties.subtype || "").toLowerCase() === "gate") restyle(layer, layer.feature.id === this.selectedId);
+    }
+  }
+
+  /** Colours paddocks by pasture (id → colour), or back to normal with null. */
+  setPasture(map) {
+    const changed = new Set([...(pastureFill?.keys() || []), ...(map?.keys() || [])]);
+    pastureFill = map;
+    for (const id of changed) {
+      const layer = this.layersById.get(id);
+      if (layer) restyle(layer, id === this.selectedId);
     }
   }
 

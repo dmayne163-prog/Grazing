@@ -354,6 +354,18 @@ CREATE TABLE IF NOT EXISTS settings (
     // Set on a mob created by an action (a draft), so undoing it removes the mob too.
     db.exec("ALTER TABLE mobs ADD COLUMN batch TEXT");
   }
+  // PastureKey's paddock readings carry more than the farm report does.
+  const pastureCols = (db.pragma("table_info(pasture_obs)") as Array<{ name: string }>).map((c) => c.name);
+  for (const [col, type] of [
+    ["tsdm_error", "REAL"],          // ± kg/ha on the median
+    ["change_rate", "REAL"],         // kg/ha a day
+    ["captured_pct", "REAL"],        // how much of the paddock the satellite saw clearly
+    ["green", "REAL"],               // green (growing) part of the TSDM, kg/ha
+    ["green_change_rate", "REAL"],
+  ] as const) {
+    if (!pastureCols.includes(col)) db.exec(`ALTER TABLE pasture_obs ADD COLUMN ${col} ${type}`);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_pasture_feature ON pasture_obs(feature_id, date)");
 }
 
 /* --------------------------------- events -------------------------------- */

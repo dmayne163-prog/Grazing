@@ -31,13 +31,14 @@ const PICKERS = {
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
       Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv).<br>
-      Pasture: a Cibo Labs pasture report (.zip).`,
+      Pasture: a Cibo Labs download (.zip): the farm's Pasture Biomass report, or PastureKey's paddock readings.`,
   },
   pasture: {
     title: "Import a Cibo Labs pasture report",
     accept: ".zip,.csv",
-    help: `The Pasture Biomass report from Cibo Labs, as the .zip they send (or the _tsdm_report.csv inside it).<br>
-      Importing it again later just adds the new months.`,
+    help: `A download from Cibo Labs, as the .zip they send: PastureKey's paddock readings (PaddocksTsdmTimeSeries…zip),
+      or the farm's Pasture Biomass report (pasturebiomass_….zip).<br>
+      Importing a newer download later just adds what's new.`,
   },
   map: {
     title: "Import a map",
@@ -105,7 +106,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
     dialog.querySelector(".body").innerHTML = `<p>Reading <b>${escapeHtml(file.name)}</b>…</p>`;
     try {
       // Cibo Labs names its downloads pasturebiomass_<farm>_<time>.zip.
-      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_/i.test(file.name)) {
+      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_|^PaddocksTsdmTimeSeries/i.test(file.name)) {
         showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
         return;
       }
@@ -562,6 +563,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
   /* ------------------------- step 2: pasture report ------------------------- */
 
   function showPastureReview(filename, p) {
+    if (p.kind === "pasturekey") { showPastureKeyReview(filename, p); return; }
     const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
     const kg = (v) => (v === null || v === undefined ? "—" : `${Math.round(v).toLocaleString("en-AU")} kg/ha`);
     const cov = p.coverage;
@@ -599,6 +601,41 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         const res = await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
         dialog.close();
         onDone(`Imported the pasture report: ${res.added} new month${res.added === 1 ? "" : "s"}${res.updated ? `, ${res.updated} refreshed` : ""}`);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  function showPastureKeyReview(filename, p) {
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review PastureKey readings</h2>
+          <div class="muted small">${escapeHtml(filename)} · ${p.paddocks} paddocks · ${p.passes} satellite passes · ${fmt(p.from)} to ${fmt(p.to)}</div>
+        </header>
+        <div class="body">
+          <p>${p.readings.toLocaleString("en-AU")} paddock readings: ${p.new.toLocaleString("en-AU")} new${p.updated ? `, ${p.updated.toLocaleString("en-AU")} already imported that will be refreshed` : ""}.</p>
+          <p class="small">${p.matched} of ${p.paddocks} paddocks match a paddock on the map by name.</p>
+          ${p.unmatched.length ? `<div class="note warn small">No paddock on the map is called ${p.unmatched.map((n) => `"${escapeHtml(n)}"`).join(", ")}, so ${p.unmatched.length === 1 ? "its readings are" : "their readings are"} left out. Rename the paddock in the app or in Cibo to match, then import again.</div>` : ""}
+          ${p.area_off.length ? `<div class="note warn small">Cibo's area differs by more than 5% for ${p.area_off.map((a) => `${escapeHtml(a.name)} (app ${a.app_ha} ha, Cibo ${a.cibo_ha} ha)`).join(", ")}. Cibo may have an older boundary; send them the paddock file from Tools.</div>` : ""}
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      try {
+        const res = await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
+        dialog.close();
+        onDone(`Imported PastureKey: ${res.added.toLocaleString("en-AU")} new readings${res.updated ? `, ${res.updated.toLocaleString("en-AU")} refreshed` : ""}`);
       } catch (e) {
         btn.disabled = false;
         dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
