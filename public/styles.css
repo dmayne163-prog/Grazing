@@ -431,7 +431,9 @@ table.mobs-review tr.dup td{opacity:.6}
 }
 .cellinput{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
 .danger-link{color:var(--crit)}
-.tabs{overflow-x:auto;scrollbar-width:none}
+/* Tabs wrap onto a second row rather than scroll: a hidden scrollbar left the
+   last tabs (Layers, Tools) off the edge where nobody would think to look. */
+.tabs{flex-wrap:wrap;row-gap:0}
 .tabs button{white-space:nowrap}
 
 /* --------------------------------- mob icons -------------------------------- */
