@@ -40,6 +40,9 @@ CF_ACCESS_TEAM_DOMAIN="${CF_ACCESS_TEAM_DOMAIN:-}"
 CF_ACCESS_AUD="${CF_ACCESS_AUD:-}"
 CF_ACCESS_REQUIRED="${CF_ACCESS_REQUIRED:-true}"
 TRUSTED_PROXIES="${TRUSTED_PROXIES:-loopback,uniquelocal}"
+# SILO climate data: its API takes an email address as the username. Kept in
+# local.env with the other per-site values.
+SILO_EMAIL="${SILO_EMAIL:-}"
 
 echo "==> building $IMAGE"
 docker build -t "$IMAGE" .
@@ -64,6 +67,7 @@ docker run -d \
   -e CF_ACCESS_AUD="$CF_ACCESS_AUD" \
   -e CF_ACCESS_REQUIRED="$CF_ACCESS_REQUIRED" \
   -e TRUSTED_PROXIES="$TRUSTED_PROXIES" \
+  -e SILO_EMAIL="$SILO_EMAIL" \
   "$IMAGE"
 
 echo

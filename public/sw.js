@@ -13,7 +13,8 @@
  *  - Nothing else is cached. Every change is sent to the server live.
  */
 
-const STATIC = "static-v1";
+// Bumped when the caching rules change, so phones drop copies kept under the old ones.
+const STATIC = "static-v2";
 const DATA = "data-v1";
 const TILES = "tiles-qld";
 
@@ -64,7 +65,10 @@ async function cacheFirst(req, cacheName) {
 async function networkFirst(req, cacheName, key) {
   const cache = await caches.open(cacheName);
   try {
-    const res = await fetch(req);
+    // Straight past the browser's own HTTP cache to the server, so an update
+    // shows on the next load. Out of signal this throws and the copy below is used.
+    // (A navigation request can't take options; the page itself is sent no-store.)
+    const res = await (req.mode === "navigate" ? fetch(req) : fetch(req, { cache: "no-cache" }));
     // Only good answers are kept. A sign-in page or an error must not replace
     // the last working copy of the map.
     if (res.ok && !res.redirected) await cache.put(key || req, res.clone());

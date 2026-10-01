@@ -79,9 +79,15 @@ app.get(["/", "/index.html"], noStore, (req, res, next) => {
   res.sendFile(join(publicDir, "login.html"), { etag: false });
 });
 
-// No max-age: an app left open on a phone would otherwise keep running stale
-// JS for that long after an update. The service worker handles offline.
-app.use(express.static(publicDir, { index: "index.html", etag: true, maxAge: 0 }));
+// The app's own code must be checked with the server on every load, or a phone
+// keeps running the old version after an update. "no-cache" rather than
+// max-age=0: Cloudflare's Browser Cache TTL raises a short max-age to hours on
+// the way through the tunnel, but passes no-cache untouched. The ETag keeps
+// each check to a 304 when nothing has changed. The service worker handles offline.
+app.use(express.static(publicDir, {
+  index: "index.html", etag: true, cacheControl: false,
+  setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+}));
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
