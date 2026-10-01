@@ -98,17 +98,20 @@ let gateStates = new Map();
 let pastureFill = null;
 
 /**
- * Pasture bins, kg of dry matter a hectare, and a one-hue green ramp for
- * them: light is little feed, dark is plenty. Validated as an ordinal ramp
- * (monotone lightness, visible steps, single hue).
+ * Pasture bins, kg of dry matter a hectare, on a yellow → green → blue ramp:
+ * yellow is little feed, blue is plenty. Lightness falls evenly step to step
+ * (checked: monotone, every gap visible, darkest still clears the surface), so
+ * the order reads even in greyscale or with colour-blindness; the change of
+ * hue on top of that is what makes short and plentiful paddocks jump out.
  */
 export const PASTURE_BINS = [
-  { below: 500, colour: "#d6f2e4", label: "under 500" },
-  { below: 1000, colour: "#a3dfc2", label: "500–1,000" },
-  { below: 1500, colour: "#68c69b", label: "1,000–1,500" },
-  { below: 2000, colour: "#2fa974", label: "1,500–2,000" },
-  { below: 3000, colour: "#16865a", label: "2,000–3,000" },
-  { below: Infinity, colour: "#0b5f40", label: "3,000 and over" },
+  { below: 500, colour: "#f9ee82", label: "under 500" },
+  { below: 1000, colour: "#c2d957", label: "500–1,000" },
+  { below: 1500, colour: "#86c86f", label: "1,000–1,500" },
+  { below: 2000, colour: "#4bab7c", label: "1,500–2,000" },
+  { below: 3000, colour: "#2a8c8c", label: "2,000–3,000" },
+  { below: 4000, colour: "#2c6cab", label: "3,000–4,000" },
+  { below: Infinity, colour: "#2b4ca8", label: "4,000 and over" },
 ];
 export const pastureColour = (kg) => PASTURE_BINS.find((b) => kg < b.below).colour;
 
