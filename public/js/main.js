@@ -6,6 +6,7 @@ import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
 import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
 import { openGateFinder } from "./gatefinder.js";
+import { loadOptiweigh } from "./optiweighui.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -579,6 +580,9 @@ function toolsHtml() {
       </div>
     ` : ""}
 
+    <h3>Optiweigh</h3>
+    <div id="owBox"><p class="muted small">Loading…</p></div>
+
     <h3>Export</h3>
     <p class="muted small">The whole map, every field included. Keep a copy somewhere safe.</p>
     <div class="btns">
@@ -656,6 +660,7 @@ function bindOverview() {
     b.onclick = () => startImport(b.dataset.import);
   });
 
+  loadOptiweigh(ctx, $("#owBox", body));
   const fg = $("#findGates", body);
   if (fg) fg.onclick = () => openGateFinder($("#dialog"), {
     toast,

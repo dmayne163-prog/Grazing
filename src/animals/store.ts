@@ -778,3 +778,114 @@ export function moveAnimalsToMob(fromMob: number, toMob: number, date: string, u
   }
   return moved;
 }
+
+/* ----------------------------- Optiweigh: API ----------------------------- */
+
+/** One animal's weight for one day, as Optiweigh's API gives it. */
+export interface OptiweighApiRecord { date: string; eid: string; visId: string | null; kg: number; sessionId: number }
+
+export interface OptiweighSessionUse { mob_id: number | null; record_only: boolean }
+
+/**
+ * One day's weights from the API. A session assigned to a mob brings its
+ * animals into that mob (only those in no mob yet — an animal already in
+ * another mob is never moved by the unit); a record-only session just keeps
+ * the weights on each animal. Sessions that are neither are held.
+ * The latest days are fetched again on the next run, so a day's figure
+ * already recorded is brought up to date rather than doubled.
+ */
+export function recordOptiweighDay(
+  recs: OptiweighApiRecord[], sessions: Map<number, OptiweighSessionUse>, username: string | null, batch: string,
+): { created: number; weighed: number; updated: number; held: number; mobDates: Map<number, Set<string>> } {
+  let created = 0, weighed = 0, updated = 0, held = 0;
+  const mobDates = new Map<number, Set<string>>();
+  const now = Date.now();
+  db.transaction(() => {
+    for (const r of recs) {
+      const use = sessions.get(r.sessionId);
+      if (!use || (use.mob_id === null && !use.record_only)) { held++; continue; }
+      const eid = r.eid.replace(/\D/g, "");
+      if (eid.length < 10 || !(r.kg > 0 && r.kg < 1500)) continue;
+      let a = db.prepare("SELECT * FROM animals WHERE eid = ?").get(eid) as AnimalRow | undefined;
+      if (!a) {
+        const id = Number(db.prepare(`
+          INSERT INTO animals (eid, tag, nlis, data, source, batch, created_at, updated_at)
+          VALUES (?, ?, NULL, '{}', 'optiweigh', ?, ?, ?)
+        `).run(eid, r.visId || null, batch, now, now).lastInsertRowid);
+        a = db.prepare("SELECT * FROM animals WHERE id = ?").get(id) as AnimalRow;
+        created++;
+      }
+      if (use.mob_id !== null && currentMob(eventsOf(a.id)) === null) {
+        addAnimalEvent(a.id, { date: r.date, kind: "join", mob_id: use.mob_id, data: { optiweigh_session: r.sessionId } }, "optiweigh", username, batch);
+      }
+      const kg = Math.round(r.kg * 10) / 10;
+      const had = db.prepare(
+        "SELECT id, weight_kg FROM animal_events WHERE animal_id = ? AND kind = 'weigh' AND date = ? AND source = 'optiweigh'"
+      ).get(a.id, r.date) as { id: number; weight_kg: number } | undefined;
+      if (had) {
+        if (had.weight_kg !== kg) { db.prepare("UPDATE animal_events SET weight_kg = ? WHERE id = ?").run(kg, had.id); updated++; }
+      } else {
+        addAnimalEvent(a.id, { date: r.date, kind: "weigh", weight_kg: kg, data: { device: "optiweigh", session: r.sessionId, ...(use.record_only ? { record_only: true } : {}) } }, "optiweigh", username, batch);
+        weighed++;
+      }
+      if (use.mob_id !== null) {
+        const set = mobDates.get(use.mob_id) ?? new Set<string>();
+        set.add(r.date);
+        mobDates.set(use.mob_id, set);
+      }
+    }
+  })();
+  return { created, weighed, updated, held, mobDates };
+}
+
+/**
+ * Re-works the mob's weekly Optiweigh weight for each week these dates fall
+ * in, from every Optiweigh weight of the animals now in the mob: the median of
+ * each animal's weights that week, with gain from the same animals three to
+ * six weeks before. Replaces that week's earlier Optiweigh figure, so a week
+ * filling up day by day keeps one weighing, not seven.
+ */
+export function refreshOptiweighWeeks(mobId: number, dates: Iterable<string>, username: string | null, batch: string): number {
+  const ids = animalsInMob(mobId).filter((a) => a.status === "alive").map((a) => a.id);
+  if (!ids.length) return 0;
+  const first = (db.prepare("SELECT MIN(date) d FROM mob_events WHERE mob_id = ?").get(mobId) as { d: string | null }).d;
+  const shift = (d: string, n: number) => {
+    const t = new Date(`${d}T00:00:00Z`);
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+  };
+  const weekData = (start: string) => {
+    const rows = db.prepare(`
+      SELECT animal_id, date, weight_kg FROM animal_events
+      WHERE kind = 'weigh' AND source = 'optiweigh' AND date BETWEEN ? AND ?
+        AND json_extract(data, '$.record_only') IS NOT 1
+        AND animal_id IN (${ids.map(() => "?").join(",")})
+    `).all(start, shift(start, 6), ...ids) as Array<{ animal_id: number; date: string; weight_kg: number }>;
+    const animals = new Map<string, number[]>();
+    let last = start;
+    for (const r of rows) {
+      animals.set(String(r.animal_id), [...(animals.get(String(r.animal_id)) ?? []), r.weight_kg]);
+      if (r.date > last) last = r.date;
+    }
+    return { week: start, last, animals };
+  };
+  let written = 0;
+  for (const wk of new Set([...dates].map(weekOf))) {
+    const w = weekData(wk);
+    if (w.animals.size < MIN_WEEK_HEAD || (first && w.last < first)) continue;
+    const earlier = [3, 4, 5, 6].map((n) => weekData(shift(wk, -7 * n)));
+    const kg = Math.round(median([...w.animals.values()].map(median)) * 10) / 10;
+    db.transaction(() => {
+      db.prepare(`
+        DELETE FROM mob_events WHERE mob_id = ? AND kind = 'weigh' AND date BETWEEN ? AND ?
+          AND json_extract(data, '$.method') = 'optiweigh'
+      `).run(mobId, wk, shift(wk, 6));
+      addEvent(mobId, {
+        date: w.last, kind: "weigh", weight_kg: kg, adg_kg: pairedGain(w, earlier),
+        data: { method: "optiweigh", head_weighed: w.animals.size, note: `Optiweigh: median of the ${w.animals.size} animals over the unit that week` },
+      }, "app", username, batch);
+    })();
+    written++;
+  }
+  return written;
+}

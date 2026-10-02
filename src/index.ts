@@ -11,6 +11,7 @@ import { animalApi } from "./api/animal-routes.js";
 import { climateApi } from "./api/climate-routes.js";
 import { pastureApi } from "./api/pasture-routes.js";
 import { startClimateSync } from "./climate/silo.js";
+import { startOptiweighSync } from "./animals/optiweigh-sync.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -108,6 +109,7 @@ void initAccess();
 const rateLimitSweeper = startRateLimitSweeper();
 const backupTimer = startBackups();
 const climateTimer = startClimateSync();
+const optiweighTimer = startOptiweighSync();
 
 const housekeeping = setInterval(() => {
   const gone = deleteExpiredSessions();
@@ -142,6 +144,7 @@ function shutdown(signal: string) {
   clearInterval(rateLimitSweeper);
   clearInterval(backupTimer);
   clearInterval(climateTimer);
+  clearInterval(optiweighTimer);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3_000).unref();
 }

@@ -114,5 +114,15 @@ export const config = {
   /** Local hour after which the day's SILO top-up runs; SILO updates overnight. */
   siloHour: num("SILO_HOUR", 7),
 
+  /**
+   * Optiweigh's API: the farm's client ID and API key, issued by Optiweigh.
+   * The key is a password: it lives in local.env on the server, never in git.
+   * With no key the app doesn't fetch from Optiweigh; file imports still work.
+   */
+  optiweighClientId: num("OPTIWEIGH_CLIENT_ID", 0),
+  optiweighKey: str("OPTIWEIGH_API_KEY", ""),
+  /** Local hour after which the day's Optiweigh fetch runs. */
+  optiweighHour: num("OPTIWEIGH_HOUR", 6),
+
   logLevel: str("LOG_LEVEL", "info"),
 };

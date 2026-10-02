@@ -43,6 +43,10 @@ TRUSTED_PROXIES="${TRUSTED_PROXIES:-loopback,uniquelocal}"
 # SILO climate data: its API takes an email address as the username. Kept in
 # local.env with the other per-site values.
 SILO_EMAIL="${SILO_EMAIL:-}"
+# Optiweigh's API: client ID and key from Optiweigh. The key is a password —
+# local.env only, never git.
+OPTIWEIGH_CLIENT_ID="${OPTIWEIGH_CLIENT_ID:-}"
+OPTIWEIGH_API_KEY="${OPTIWEIGH_API_KEY:-}"
 
 echo "==> building $IMAGE"
 docker build -t "$IMAGE" .
@@ -68,6 +72,8 @@ docker run -d \
   -e CF_ACCESS_REQUIRED="$CF_ACCESS_REQUIRED" \
   -e TRUSTED_PROXIES="$TRUSTED_PROXIES" \
   -e SILO_EMAIL="$SILO_EMAIL" \
+  -e OPTIWEIGH_CLIENT_ID="$OPTIWEIGH_CLIENT_ID" \
+  -e OPTIWEIGH_API_KEY="$OPTIWEIGH_API_KEY" \
   "$IMAGE"
 
 echo

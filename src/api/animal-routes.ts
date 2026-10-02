@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
-import { addEvent } from "../db/database.js";
+import { addEvent, db } from "../db/database.js";
+import { assignSession, lastSync, listSessions, optiweighConfigured, syncOptiweigh, syncRunning } from "../animals/optiweigh-sync.js";
 import { logger } from "../logger.js";
 import {
   animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, setSexForMob, updateAnimal, weighAnimal,
@@ -85,4 +86,32 @@ animalApi.post("/animals/:id/death", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as Record<string, unknown>;
   act(req, res, `recorded the death of animal #${req.params["id"]}`, () =>
     animalDeath(Number(req.params["id"]), parseWhen(b["date"], b["time"]), text(b["cause"]), b["also_mob"] !== false, who(req)));
+});
+
+/* -------------------------------- Optiweigh -------------------------------- */
+
+animalApi.get("/optiweigh", (_req, res) => {
+  const mobName = new Map((db.prepare("SELECT id, name FROM mobs").all() as Array<{ id: number; name: string }>).map((m) => [m.id, m.name]));
+  res.json({
+    configured: optiweighConfigured(),
+    running: syncRunning(),
+    last: lastSync(),
+    sessions: listSessions().map((s) => ({ ...s, mob_name: s.mob_id === null ? null : mobName.get(s.mob_id) ?? `#${s.mob_id}` })),
+  });
+});
+
+/** Which mob a session is with, or a record only. Its days are fetched again under the new assignment. */
+animalApi.put("/optiweigh/sessions/:id", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const mob = b["mob_id"] === null || b["mob_id"] === undefined || b["mob_id"] === "" ? null : Number(b["mob_id"]);
+  act(req, res, `assigned Optiweigh session ${req.params["id"]} to ${mob === null ? (b["record_only"] ? "records only" : "nothing") : `mob #${mob}`}`, () => {
+    assignSession(Number(req.params["id"]), { mob_id: mob, record_only: mob === null && b["record_only"] === true }, req.user?.username ?? null);
+    void syncOptiweigh(req.user?.username ?? null);
+    return {};
+  });
+});
+
+animalApi.post("/optiweigh/sync", requireAdmin, (req, res) => {
+  void syncOptiweigh(req.user?.username ?? null);
+  res.json({ ok: true, started: true });
 });

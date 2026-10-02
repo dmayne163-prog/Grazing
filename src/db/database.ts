@@ -324,6 +324,24 @@ CREATE TABLE IF NOT EXISTS pasture_obs (
   UNIQUE (feature_id, date, source)
 );
 
+-- Optiweigh's sessions: each a deployment of a walk-over unit with one mob.
+-- A session is assigned to the mob it's with, so its animals and weights
+-- follow that mob; or kept as a record only, the weights on each animal and
+-- nothing else (every session that ended before the link was switched on).
+-- Unassigned sessions are held: their weights wait until they're assigned.
+CREATE TABLE IF NOT EXISTS optiweigh_sessions (
+  session_id  INTEGER PRIMARY KEY,
+  name        TEXT,
+  start_date  TEXT,
+  end_date    TEXT,
+  status      TEXT,
+  mob_id      INTEGER,
+  record_only INTEGER NOT NULL DEFAULT 0,
+  synced_to   TEXT,                       -- the last day its weights have been brought in
+  assigned_by TEXT,
+  updated_at  INTEGER NOT NULL
+);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
