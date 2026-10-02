@@ -12,6 +12,7 @@ import { climateApi } from "./api/climate-routes.js";
 import { pastureApi } from "./api/pasture-routes.js";
 import { startClimateSync } from "./climate/silo.js";
 import { startOptiweighSync } from "./animals/optiweigh-sync.js";
+import { reconcileAllMobWeights } from "./animals/store.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -110,6 +111,13 @@ const rateLimitSweeper = startRateLimitSweeper();
 const backupTimer = startBackups();
 const climateTimer = startClimateSync();
 const optiweighTimer = startOptiweighSync();
+// Mobs whose animals were weighed more recently than the mob itself catch up.
+setTimeout(() => {
+  try {
+    const n = reconcileAllMobWeights("app");
+    if (n) log.info(`brought ${n} mob weight(s) up to date from their animals' latest weights`);
+  } catch (e) { log.error("mob weight catch-up failed", e); }
+}, 15_000).unref();
 
 const housekeeping = setInterval(() => {
   const gone = deleteExpiredSessions();

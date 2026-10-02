@@ -278,8 +278,19 @@ export async function loadMobAnimals(ctx, m, el) {
   const alive = list.filter((a) => a.status === "alive");
   const weighed = alive.filter((a) => a.last_weight_kg != null);
   const mean = weighed.length ? weighed.reduce((t, a) => t + a.last_weight_kg, 0) / weighed.length : null;
+  // The mob's own weight (what AE and stocking use) against its animals'
+  // recent weights: only animals weighed within a fortnight of the newest, and
+  // enough of them, so a few old readings don't raise a false alarm.
+  const newest = weighed.map((a) => a.last_weighed).filter(Boolean).sort().pop();
+  const cutoff = newest ? new Date(Date.parse(`${newest}T00:00:00Z`) - 14 * 86_400_000).toISOString().slice(0, 10) : null;
+  const recent = cutoff ? weighed.filter((a) => a.last_weighed >= cutoff) : [];
+  const recentMean = recent.length ? recent.reduce((t, a) => t + a.last_weight_kg, 0) / recent.length : null;
+  const mobKg = m.est_weight_kg ?? m.weight_kg;
+  const mismatch = recentMean !== null && mobKg && recent.length >= Math.min(m.head, Math.max(10, Math.ceil(m.head * 0.1)))
+    && Math.abs(recentMean - mobKg) / mobKg > 0.05;
   el.innerHTML = `
     <p class="small">${alive.length === m.head ? `All ${m.head} hd have records` : `${alive.length} animal records for ${m.head} hd`}${list.length > alive.length ? ` (plus ${list.length - alive.length} dead, sold or gone)` : ""}${mean ? ` · latest weights average <b>${nf0.format(mean)} kg</b>` : ""}.</p>
+    ${mismatch ? `<div class="note warn small">The mob is down as <b>${nf0.format(mobKg)} kg</b>, but the ${recent.length} animals weighed most recently (to ${day(newest)}) average <b>${nf0.format(recentMean)} kg</b>. AE and stocking go by the mob's weight: record a weighing if the animals are right.</div>` : ""}
     ${alive.length > m.head ? `<p class="note warn small">${alive.length - m.head} more animal record${alive.length - m.head === 1 ? "" : "s"} than head. If the mob has had deaths or sales, open the animal and record it — untick “take 1 hd off” where the mob's count already allows for it.</p>`
       : alive.length < m.head ? `<p class="muted tiny">${m.head - alive.length} hd have no individual record yet.</p>` : ""}
     ${ctx.canEdit && alive.some((a) => !a.sex) ? `<div class="setsex small">

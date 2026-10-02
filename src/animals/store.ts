@@ -303,6 +303,8 @@ export function weighAnimal(id: number, kgRaw: unknown, when: When, note: string
   if (!Number.isFinite(kg) || kg <= 0 || kg > 1500) throw new StockError("Enter the weight in kg");
   const batch = randomUUID();
   addAnimalEvent(id, { date: when.date, time: when.time, kind: "weigh", weight_kg: Math.round(kg * 10) / 10, text: note }, "app", username, batch);
+  const mob = currentMob(eventsOf(id));
+  if (mob !== null) reconcileMobWeight(mob, username, batch);
   return { batch };
 }
 
@@ -578,6 +580,8 @@ export function commitSession(
       };
       addEvent(opts.mob_id, e, "app", username, batch);
     }
+    // Weights in the session not set on the mob above still bring its weight up to date.
+    if (opts.mob_id !== null && !opts.sold) reconcileMobWeight(opts.mob_id, username, batch);
     return { batch, session_id: sid, created, weighed };
   })();
 }
@@ -899,4 +903,68 @@ function bump(t: string): string {
   const [h, m] = t.split(":").map(Number) as [number, number];
   const n = Math.min(23 * 60 + 59, h * 60 + m + 1);
   return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+}
+
+/* ------------------------- mob weight from animals ------------------------ */
+
+/** Fewer animals than this (or than 10% of the mob) don't set the mob's weight. */
+const MIN_ANIMALS_FOR_MOB = 10;
+
+/**
+ * Keeps a mob's weight on its latest real weights. Where the mob's animals
+ * have been weighed (scales sessions, a single weighing) more recently than
+ * the mob's own weight, their average — those weighed within a fortnight of
+ * the newest — becomes the mob's weight, recorded with how many it rests on.
+ * AE, stocking rates and the pasture model all follow the mob's weight.
+ *
+ * Optiweigh's daily weights are left out: Optiweigh sets the mob's weight
+ * itself, weekly, from a fair sample (refreshOptiweighWeeks).
+ */
+export function reconcileMobWeight(mobId: number, username: string | null, batch: string | null = null): { weight_kg: number; animals: number } | null {
+  const view = mobViews().find((v) => v.mob.id === mobId);
+  if (!view || view.state.head < 1) return null;
+  const ids = animalsInMob(mobId).filter((a) => a.status === "alive").map((a) => a.id);
+  if (!ids.length) return null;
+  const latest = db.prepare(`
+    SELECT animal_id, MAX(date) AS date FROM animal_events
+    WHERE kind = 'weigh' AND weight_kg IS NOT NULL AND source != 'optiweigh'
+      AND animal_id IN (${ids.map(() => "?").join(",")})
+    GROUP BY animal_id
+  `).all(...ids) as Array<{ animal_id: number; date: string }>;
+  if (!latest.length) return null;
+  const newest = latest.map((r) => r.date).sort().pop()!;
+  const cutoff = new Date(Date.parse(`${newest}T00:00:00Z`) - 14 * 86_400_000).toISOString().slice(0, 10);
+  const kgs: number[] = [];
+  for (const r of latest) {
+    if (r.date < cutoff) continue;
+    const w = db.prepare(`
+      SELECT weight_kg FROM animal_events WHERE animal_id = ? AND kind = 'weigh' AND date = ? AND weight_kg IS NOT NULL AND source != 'optiweigh'
+      ORDER BY id DESC LIMIT 1
+    `).get(r.animal_id, r.date) as { weight_kg: number } | undefined;
+    if (w) kgs.push(w.weight_kg);
+  }
+  const need = Math.min(view.state.head, Math.max(MIN_ANIMALS_FOR_MOB, Math.ceil(view.state.head * 0.1)));
+  if (kgs.length < need) return null;
+  const kg = Math.round((kgs.reduce((t, x) => t + x, 0) / kgs.length) * 10) / 10;
+
+  // The mob's current weighing: newer than the animals', or already this figure, and it stands.
+  const cur = db.prepare(`
+    SELECT date, time, weight_kg FROM mob_events WHERE mob_id = ? AND kind = 'weigh' AND weight_kg IS NOT NULL
+    ORDER BY date DESC, (time IS NULL), time DESC, id DESC LIMIT 1
+  `).get(mobId) as { date: string; time: string | null; weight_kg: number } | undefined;
+  if (cur && (cur.date > newest || (cur.date === newest && Math.abs(cur.weight_kg - kg) < 1))) return null;
+
+  const sameDay = db.prepare("SELECT MAX(time) t FROM mob_events WHERE mob_id = ? AND date = ?").get(mobId, newest) as { t: string | null };
+  addEvent(mobId, {
+    date: newest, time: sameDay.t ? bump(sameDay.t) : null, kind: "weigh", weight_kg: kg,
+    data: { method: "scales", head_weighed: kgs.length, from_animals: true, note: `From the latest weights of ${kgs.length} animals in the mob` },
+  }, "app", username, batch);
+  return { weight_kg: kg, animals: kgs.length };
+}
+
+/** Every mob, once: brings any mob whose animals were weighed after it up to date. */
+export function reconcileAllMobWeights(username: string | null): number {
+  let n = 0;
+  for (const v of mobViews()) if (reconcileMobWeight(v.mob.id, username)) n++;
+  return n;
 }
