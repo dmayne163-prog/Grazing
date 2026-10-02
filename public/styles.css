@@ -566,3 +566,5 @@ ul.gatefind li{padding:10px 0;border-top:1px solid var(--line-soft)}
 ul.gatefind .pick{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 ul.gatefind .pick input{margin-top:4px}
 .chip.strongchip{background:var(--good-bg);color:var(--good)}
+/* Rows in a pick list read as plain text, not as form labels. */
+.f .checklist label{text-transform:none;letter-spacing:normal;font-weight:400;font-size:13px;color:var(--ink);margin:0}

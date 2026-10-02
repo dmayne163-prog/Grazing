@@ -124,7 +124,19 @@ export function openMoveDialog(ctx, m, dest) {
           <div class="f"><label for="mvName">Name for the ones moved</label><input id="mvName" value="${escapeHtml(`${m.name} (draft)`)}" autocomplete="off"></div>
           ${m.sex ? "" : `<div class="f"><label for="mvSex">Sex of the ones moved</label>
             <select id="mvSex"><option value="">mixed / unknown</option><option value="female">female</option><option value="steer">steer</option><option value="male">male</option></select></div>`}
-          <div class="f"><label for="mvWhich">Which ones</label><input id="mvWhich" placeholder="e.g. the 20 lightest, tags 101–120" autocomplete="off"></div>
+          <div class="f"><label for="mvWhich">Which ones</label>
+            <textarea id="mvWhich" rows="3" placeholder="Paste EIDs or visual tags (one per line, or separated by commas) to draft exactly those animals. Or just describe them, e.g. the 20 lightest."></textarea>
+            <div id="mvMatch" class="small"></div>
+            <button type="button" class="linkbtn small" id="mvPickBtn">Pick from this mob's animals…</button>
+            <div id="mvPick" hidden>
+              <div class="row2 gap-top">
+                <input id="mvPickQ" type="search" placeholder="Search tag or EID" autocomplete="off">
+                <select id="mvPickSort" aria-label="Sort"><option value="tag">By tag</option><option value="heavy">Heaviest first</option><option value="light">Lightest first</option></select>
+              </div>
+              <div class="checklist" id="mvPickList"><p class="muted small">Loading…</p></div>
+              <p class="muted tiny" id="mvPickCount"></p>
+            </div>
+          </div>
           <p class="muted small">They become a separate mob in the new paddock. ${escapeHtml(m.name)} keeps the rest where they are.</p>
         </div>
         ${others.length ? `<div class="f" id="mvOthers"><label>Also move</label>
@@ -153,6 +165,101 @@ export function openMoveDialog(ctx, m, dest) {
   };
   dialog.querySelectorAll('input[name="mvHow"], #mvOthers input').forEach((el) => el.addEventListener("change", refreshForm));
   $("#mvHead", dialog).addEventListener("input", refreshForm);
+
+  // A pasted list of EIDs or tags: exactly those animals, matched as you type.
+  let matched = null;
+  let matchSeq = 0;
+  let matchTimer = null;
+  const runMatch = async () => {
+    const text = $("#mvWhich", dialog).value;
+    const box = $("#mvMatch", dialog);
+    const head = $("#mvHead", dialog);
+    const mine = ++matchSeq;
+    if (!/\d{3}/.test(text)) {
+      matched = null;
+      box.innerHTML = "";
+      head.readOnly = false;
+      return;
+    }
+    let r;
+    try {
+      r = await send("POST", `/api/mobs/${m.id}/match-animals`, { text });
+    } catch {
+      return;
+    }
+    if (mine !== matchSeq) return;
+    if (!r.matched.length) {
+      matched = null;
+      head.readOnly = false;
+      box.innerHTML = '<span class="muted">No animals in this mob match that list, so it\'s kept as a note.</span>';
+      return;
+    }
+    matched = r;
+    head.value = String(r.matched.length);
+    head.readOnly = true;
+    const kgBox = $("#mvKg", dialog);
+    const kgs = r.matched.map((a) => a.last_weight_kg).filter((w) => w != null);
+    const avg = kgs.length ? Math.round(kgs.reduce((t, w) => t + w, 0) / kgs.length) : null;
+    kgBox.placeholder = avg ? `${avg} if left blank (theirs)` : kgBox.placeholder;
+    const list = (xs) => xs.map((x) => escapeHtml(x)).join(", ");
+    box.innerHTML = `<b>${r.matched.length}</b> animal${r.matched.length === 1 ? "" : "s"} in this mob will go${avg ? `, averaging <b>${avg} kg</b>` : ""}. Their records go with them.`
+      + (r.elsewhere.length ? `<div class="bad">Not in this mob: ${r.elsewhere.map((e) => `${escapeHtml(e.token)} (${e.status !== "alive" ? e.status : escapeHtml(e.mob || "no mob")})`).join(", ")}</div>` : "")
+      + (r.ambiguous.length ? `<div class="bad">Fits more than one animal, so left out: ${list(r.ambiguous)}. Use the full tag or EID.</div>` : "")
+      + (r.not_found.length ? `<div class="bad">Not found: ${list(r.not_found)}</div>` : "");
+    refreshForm();
+  };
+  $("#mvWhich", dialog).addEventListener("input", () => {
+    clearTimeout(matchTimer);
+    matchTimer = setTimeout(runMatch, 350);
+  });
+
+  // Picking from the mob's own animals: ticks write into the list above.
+  let pickable = null;
+  const idOf = (a) => (a.eid ? a.eid : a.tag) || "";
+  const listed = () => new Set($("#mvWhich", dialog).value.split(/[\n,;\t]+/).map((x) => x.trim().replace(/\s/g, "").toLowerCase()).filter(Boolean));
+  const drawPick = () => {
+    const q = $("#mvPickQ", dialog).value.trim().toLowerCase();
+    const sort = $("#mvPickSort", dialog).value;
+    const have = listed();
+    const shown = pickable
+      .filter((a) => !q || (a.tag || "").toLowerCase().includes(q) || (a.eid || "").includes(q.replace(/\s/g, "")))
+      .sort((x, y) => sort === "heavy" ? (y.last_weight_kg ?? -1) - (x.last_weight_kg ?? -1)
+        : sort === "light" ? (x.last_weight_kg ?? 1e9) - (y.last_weight_kg ?? 1e9)
+        : (x.tag || x.eid || "").localeCompare(y.tag || y.eid || "", "en", { numeric: true }));
+    $("#mvPickList", dialog).innerHTML = shown.length ? shown.map((a) => `
+      <label><input type="checkbox" data-pick="${escapeHtml(idOf(a))}"${have.has(idOf(a).toLowerCase()) ? " checked" : ""}>
+        <span>${escapeHtml(a.tag || "(no tag)")}</span>
+        <span class="muted">${escapeHtml(a.eid ? a.eid.replace(/^(\d{3})/, "$1 ") : "")}</span>
+        <span class="muted">${a.last_weight_kg != null ? `${Math.round(a.last_weight_kg)} kg` : ""}</span></label>`).join("")
+      : '<p class="muted small">No animals match.</p>';
+    $("#mvPickCount", dialog).textContent = `${shown.length} of ${pickable.length} animals with records in this mob shown`;
+    dialog.querySelectorAll("[data-pick]").forEach((cb) => {
+      cb.onchange = () => {
+        const box = $("#mvWhich", dialog);
+        const lines = box.value.split(/\n/).map((x) => x.trim()).filter(Boolean);
+        const key = cb.dataset.pick.toLowerCase();
+        const rest = lines.filter((x) => x.replace(/\s/g, "").toLowerCase() !== key);
+        box.value = (cb.checked ? [...rest, cb.dataset.pick] : rest).join("\n");
+        clearTimeout(matchTimer);
+        matchTimer = setTimeout(runMatch, 200);
+      };
+    });
+  };
+  $("#mvPickBtn", dialog).onclick = async () => {
+    const box = $("#mvPick", dialog);
+    box.hidden = !box.hidden;
+    if (box.hidden || pickable) return;
+    try {
+      pickable = (await get(`/api/mobs/${m.id}/animals`)).filter((a) => a.status === "alive");
+    } catch (e) {
+      $("#mvPickList", dialog).innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    if (!pickable.length) { $("#mvPickList", dialog).innerHTML = '<p class="muted small">No animal records in this mob yet. A session from the scales adds them.</p>'; return; }
+    drawPick();
+  };
+  $("#mvPickQ", dialog).addEventListener("input", () => pickable && drawPick());
+  $("#mvPickSort", dialog).addEventListener("change", () => pickable && drawPick());
   bindWhen(dialog, "mv");
   $("#mvCancel", dialog).onclick = () => dialog.close();
 
@@ -202,11 +309,11 @@ export function openMoveDialog(ctx, m, dest) {
           name: $("#mvName", dialog).value,
           sex: $("#mvSex", dialog)?.value || undefined,
           weight_kg: $("#mvKg", dialog).value || null,
-          note: $("#mvWhich", dialog).value,
+          ...(matched ? { animals: $("#mvWhich", dialog).value } : { note: $("#mvWhich", dialog).value }),
         });
         dialog.close();
         await ctx.refresh();
-        undoable(ctx, `${head} hd drafted off to ${toName}`, r.batch);
+        undoable(ctx, `${head} hd drafted off to ${toName}${r.animals ? ` (${r.animals} animal records moved)` : ""}`, r.batch);
       } else {
         const ids = [m.id, ...[...dialog.querySelectorAll("#mvOthers input:checked")].map((c) => Number(c.value))];
         const r = await send("POST", "/api/actions/move", { mob_ids: ids, to: [to], ...when, note: $("#mvNote", dialog).value });

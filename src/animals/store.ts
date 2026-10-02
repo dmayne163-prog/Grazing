@@ -968,3 +968,91 @@ export function reconcileAllMobWeights(username: string | null): number {
   for (const v of mobViews()) if (reconcileMobWeight(v.mob.id, username)) n++;
   return n;
 }
+
+/* ------------------------ drafting by EID or tag list ---------------------- */
+
+/**
+ * A pasted list of EIDs and/or visual tags, one per line or separated by
+ * commas, semicolons or tabs. An EID may be written with spaces
+ * ("982 123799000987"); a line of letters and numbers separated by spaces is
+ * taken as several tags.
+ */
+export function parseIdentifiers(text: string): string[] {
+  const out: string[] = [];
+  for (const piece of text.split(/[\n\r,;\t]+/)) {
+    const p = piece.trim();
+    if (!p) continue;
+    if (/^[\d\s]+$/.test(p)) {
+      const digits = p.replace(/\s/g, "");
+      if (digits.length >= 15 && digits.length <= 16) { out.push(digits); continue; }
+      out.push(...p.split(/\s+/));
+      continue;
+    }
+    out.push(...p.split(/\s+/));
+  }
+  return [...new Set(out.filter(Boolean))];
+}
+
+export interface AnimalMatch {
+  matched: Array<{ id: number; tag: string | null; eid: string | null; last_weight_kg: number | null; last_weighed: string | null; token: string }>;
+  /** In the app, but not in this mob now. */
+  elsewhere: Array<{ token: string; tag: string | null; mob: string | null; status: string }>;
+  /** A short tag ending that fits more than one animal in the mob. */
+  ambiguous: string[];
+  not_found: string[];
+}
+
+/**
+ * Which animals in this mob a pasted list means. EIDs match exactly; tags
+ * match exactly (ignoring case), or by their ending when that fits exactly
+ * one animal in the mob — "3610" finds QIBH01313610.
+ */
+export function matchAnimalsInMob(mobId: number, text: string): AnimalMatch {
+  const inMob = animalsInMob(mobId).filter((a) => a.status === "alive");
+  const tokens = parseIdentifiers(text);
+  const res: AnimalMatch = { matched: [], elsewhere: [], ambiguous: [], not_found: [] };
+  const seen = new Set<number>();
+  const mobName = (id: number | null) => (id === null ? null : (db.prepare("SELECT name FROM mobs WHERE id = ?").get(id) as { name: string } | undefined)?.name ?? null);
+  for (const token of tokens) {
+    const digits = token.replace(/\D/g, "");
+    const isEid = digits.length >= 15 && digits === token;
+    let hits = isEid
+      ? inMob.filter((a) => a.eid === digits)
+      : inMob.filter((a) => (a.tag ?? "").toLowerCase() === token.toLowerCase());
+    if (!hits.length && !isEid && token.length >= 3) {
+      hits = inMob.filter((a) => (a.tag ?? "").toLowerCase().endsWith(token.toLowerCase()) || (a.eid ?? "").endsWith(digits.length >= 3 ? digits : "\u0000"));
+      if (hits.length > 1) { res.ambiguous.push(token); continue; }
+    }
+    if (hits.length === 1) {
+      const a = hits[0]!;
+      if (!seen.has(a.id)) {
+        seen.add(a.id);
+        res.matched.push({ id: a.id, tag: a.tag, eid: a.eid, last_weight_kg: a.last_weight_kg, last_weighed: a.last_weighed, token });
+      }
+      continue;
+    }
+    // Not in this mob: is it anywhere?
+    const any = (isEid
+      ? db.prepare("SELECT * FROM animals WHERE eid = ?").get(digits)
+      : db.prepare("SELECT * FROM animals WHERE tag = ? COLLATE NOCASE").get(token)) as AnimalRow | undefined;
+    if (any) {
+      const ev = eventsOf(any.id);
+      res.elsewhere.push({ token, tag: any.tag, mob: mobName(currentMob(ev)), status: statusOf(ev).status });
+    } else {
+      res.not_found.push(token);
+    }
+  }
+  return res;
+}
+
+/** Moves these animals' records from one mob to another on a date. Part of the caller's batch. */
+export function moveAnimals(ids: number[], from: number, to: number, date: string, username: string | null, batch: string): number {
+  let n = 0;
+  for (const id of ids) {
+    if (currentMob(eventsOf(id)) !== from) continue;
+    addAnimalEvent(id, { date, kind: "leave", mob_id: from }, "app", username, batch);
+    addAnimalEvent(id, { date, kind: "join", mob_id: to }, "app", username, batch);
+    n++;
+  }
+  return n;
+}

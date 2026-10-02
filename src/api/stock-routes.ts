@@ -24,7 +24,8 @@ import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { config } from "../config.js";
 import {
-  commitOptiweigh, commitSession, isOptiweigh, moveAnimalsToMob, parseOptiweigh, planOptiweigh, planSession, type OptiweighRow,
+  commitOptiweigh, commitSession, isOptiweigh, matchAnimalsInMob, moveAnimals, moveAnimalsToMob, parseOptiweigh, planOptiweigh,
+  planSession, reconcileMobWeight, type OptiweighRow,
 } from "../animals/store.js";
 import {
   commitHistory, historyAlreadyImported, planHistory, replayMovements,
@@ -173,11 +174,40 @@ stockApi.post("/mobs/:id/move", requireAdmin, (req, res) => {
   }));
 });
 
+/** Which animals in this mob a pasted list of EIDs or tags means: the draft dialog's preview. */
+stockApi.post("/mobs/:id/match-animals", requireAdmin, (req, res) => {
+  const text = String((req.body ?? {})["text"] ?? "").slice(0, 100_000);
+  res.json(matchAnimalsInMob(Number(req.params["id"]), text));
+});
+
+/**
+ * Drafts some of a mob off. Given a pasted list of animals, exactly those
+ * go: the head is how many matched, the weight their latest average unless
+ * one is given, and their records move to the new mob — all one action.
+ */
 stockApi.post("/mobs/:id/draft", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as Record<string, unknown>;
   act(res, () => {
-    const r = draftMob(Number(req.params["id"]), b as unknown as DraftInput, parseWhen(b["date"], b["time"]), who(req));
-    logAction(req, `drafted ${String(b["head"])} hd off mob #${req.params["id"]} into mob #${r.mob_id}`);
+    const from = Number(req.params["id"]);
+    const when = parseWhen(b["date"], b["time"]);
+    const listed = typeof b["animals"] === "string" && b["animals"].trim() ? matchAnimalsInMob(from, b["animals"]) : null;
+    if (listed && !listed.matched.length) throw new StockError("None of those animals are in this mob");
+    const input = { ...b } as Record<string, unknown>;
+    if (listed) {
+      input["head"] = listed.matched.length;
+      const kgs = listed.matched.map((a) => a.last_weight_kg).filter((w): w is number => w !== null);
+      if ((input["weight_kg"] === undefined || input["weight_kg"] === null || input["weight_kg"] === "") && kgs.length) {
+        input["weight_kg"] = Math.round((kgs.reduce((t, w) => t + w, 0) / kgs.length) * 10) / 10;
+      }
+    }
+    const r = db.transaction(() => {
+      const d = draftMob(from, input as unknown as DraftInput, when, who(req));
+      if (!listed) return { ...d, animals: 0 };
+      const moved = moveAnimals(listed.matched.map((a) => a.id), from, d.mob_id, when.date, who(req), d.batch);
+      reconcileMobWeight(from, who(req), d.batch);
+      return { ...d, animals: moved };
+    })();
+    logAction(req, `drafted ${String(input["head"])} hd off mob #${from} into mob #${r.mob_id}${listed ? ` (${r.animals} listed animals)` : ""}`);
     return r;
   });
 });
