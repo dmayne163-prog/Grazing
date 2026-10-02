@@ -568,8 +568,12 @@ export function commitSession(
 
     if (opts.update_mob_weight && opts.mob_id !== null && weights.length) {
       const mean = Math.round((weights.reduce((x, y) => x + y, 0) / weights.length) * 10) / 10;
+      // Timed after anything else recorded on the mob that day: a weighing
+      // with no time sorts first, so a weight carried over by a same-day
+      // draft would otherwise stand in for the scales.
+      const sameDay = db.prepare("SELECT MAX(time) t FROM mob_events WHERE mob_id = ? AND date = ?").get(opts.mob_id, date) as { t: string | null };
       const e: EventInput = {
-        date, kind: "weigh", weight_kg: mean,
+        date, time: sameDay.t && sameDay.t > "23:58" ? "23:59" : sameDay.t ? bump(sameDay.t) : null, kind: "weigh", weight_kg: mean,
         data: { method: "scales", head_weighed: weights.length, session_id: sid, note: `From session: ${opts.name ?? s.name}` },
       };
       addEvent(opts.mob_id, e, "app", username, batch);
@@ -888,4 +892,11 @@ export function refreshOptiweighWeeks(mobId: number, dates: Iterable<string>, us
     written++;
   }
   return written;
+}
+
+/** "HH:MM" one minute on, for ordering a record just after another the same day. */
+function bump(t: string): string {
+  const [h, m] = t.split(":").map(Number) as [number, number];
+  const n = Math.min(23 * 60 + 59, h * 60 + m + 1);
+  return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
 }
