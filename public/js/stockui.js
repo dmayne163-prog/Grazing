@@ -108,6 +108,7 @@ export function openMoveDialog(ctx, m, dest) {
           ${dest
             ? `<div class="dest">${escapeHtml(dest.properties.name)}</div>`
             : `<select id="mvTo"><option value="">Choose a paddock…</option>${choices.map((f) => `<option value="${f.id}">${escapeHtml(f.properties.name)}</option>`).join("")}</select>`}
+          <p class="small" id="mvReach" hidden></p>
         </div>
         <div class="f"><label>How many</label>
           <div class="radios">
@@ -155,13 +156,41 @@ export function openMoveDialog(ctx, m, dest) {
   bindWhen(dialog, "mv");
   $("#mvCancel", dialog).onclick = () => dialog.close();
 
+  // Gates open into the destination at that moment: the stock get those paddocks too.
+  let reach = null;
+  let asked = 0;
+  const showReach = async () => {
+    const to = dest ? dest.id : Number($("#mvTo", dialog).value);
+    const box = $("#mvReach", dialog);
+    reach = null;
+    if (!to) { box.hidden = true; return; }
+    const mine = ++asked;
+    try {
+      let when = {};
+      try { when = readWhen(dialog, "mv"); } catch { /* an unfinished date: use now */ }
+      const q = new URLSearchParams({ ids: String(to), ...(when.date ? { date: when.date } : {}), ...(when.time ? { time: when.time } : {}) });
+      const r = await get(`/api/paddocks/reach?${q}`);
+      if (mine !== asked) return;
+      reach = r;
+      box.hidden = !r.added.length;
+      box.innerHTML = r.added.length
+        ? `With the gates open then, they'll also have <b>${r.added.map(escapeHtml).join(", ")}</b> (${r.area_ha.toLocaleString("en-AU")} ha in all). To keep them out, close the gate first.`
+        : "";
+    } catch {
+      box.hidden = true;
+    }
+  };
+  $("#mvTo", dialog)?.addEventListener("change", showReach);
+  dialog.querySelectorAll('input[name="mvWhen"], #mvDate, #mvTime').forEach((el) => el.addEventListener("change", showReach));
+  showReach();
+
   $("#mvGo", dialog).onclick = async () => {
     const btn = $("#mvGo", dialog);
     try {
       const to = dest ? dest.id : Number($("#mvTo", dialog).value);
       if (!to) throw new Error("Choose where they went");
       const when = readWhen(dialog, "mv");
-      const toName = paddockName(ctx, to);
+      const toName = reach && reach.names.length > 1 ? reach.names.join(" + ") : paddockName(ctx, to);
       btn.disabled = true;
       if (some()) {
         const head = Number($("#mvHead", dialog).value);

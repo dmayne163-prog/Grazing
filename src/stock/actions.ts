@@ -95,16 +95,49 @@ export function mergeMob(
   return { batch, head: n };
 }
 
+/* ------------------------------- open gates ------------------------------ */
+
+/**
+ * The paddocks a mob put into these can actually reach at that moment: these,
+ * plus every paddock joined to them through gates open at that time, and on
+ * through those. Stock put into a paddock with a gate open graze both sides,
+ * so the records should say so — otherwise a mob drafted into a 15 ha paddock
+ * that's open into two others is counted as 15 ha of stocking.
+ */
+export function withOpenGates(dest: number[], when: When): number[] {
+  const edges = new Map<number, Set<number>>();
+  for (const { gate_id } of db.prepare("SELECT DISTINCT gate_id FROM gate_events").all() as Array<{ gate_id: number }>) {
+    const s = gateStateAt(gate_id, when.date, when.time);
+    if (s?.state !== "open") continue;
+    for (const [a, b] of [[s.paddock_a, s.paddock_b], [s.paddock_b, s.paddock_a]] as const) {
+      edges.set(a, (edges.get(a) ?? new Set()).add(b));
+    }
+  }
+  const out = [...dest];
+  const seen = new Set(dest);
+  for (let i = 0; i < out.length; i++) {
+    for (const n of edges.get(out[i]!) ?? []) {
+      if (seen.has(n)) continue;
+      const f = getFeature(n);
+      if (!f || f.kind !== "paddock" || f.deleted_at !== null) continue;
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
 /* ---------------------------------- move --------------------------------- */
 
 /**
  * Moves one or more mobs to a paddock, or a set of paddocks with gates open
- * between them. The first paddock is where their head is counted.
+ * between them. The first paddock is where their head is counted. Paddocks
+ * open into the destination at that moment are added (see withOpenGates).
  */
 export function moveMobs(
   mobIds: number[], to: unknown, when: When, note: string | null, username: string | null
 ): string {
-  const dest = paddockIds(to);
+  const dest = withOpenGates(paddockIds(to), when);
   if (mobIds.length === 0) throw new StockError("Choose a mob to move");
   const batch = randomUUID();
   db.transaction(() => {
@@ -140,7 +173,7 @@ export function draftMob(mobId: number, input: DraftInput, when: When, username:
   if (head >= parent.state.head) {
     throw new StockError(`That is the whole mob (${parent.state.head} hd) — move the mob instead`);
   }
-  const dest = paddockIds(input.to);
+  const dest = withOpenGates(paddockIds(input.to), when);
   const weight = input.weight_kg === undefined || input.weight_kg === null || input.weight_kg === ""
     ? null : Number(input.weight_kg);
   if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1500)) {

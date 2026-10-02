@@ -13,6 +13,7 @@ import {
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
   deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
+  withOpenGates,
   type DraftInput, type GateInput, type WeighInput,
 } from "../stock/actions.js";
 import { gateHistory, gateInfo, gateStateAt, isGate, listGates } from "../map/gates.js";
@@ -131,6 +132,27 @@ const nameOf = (id: number) => getFeature(id)?.name ?? `#${id}`;
 const noteOf = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 500) : null);
 
 /** Moves one mob, or several together, to a paddock or a set with gates open between. */
+/**
+ * What stock put into these paddocks would actually reach at that moment,
+ * through the gates open then — for the move and draft dialogs to show
+ * before anything is saved.
+ */
+stockApi.get("/paddocks/reach", (req, res) => {
+  try {
+    const ids = String(req.query["ids"] ?? "").split(",").filter(Boolean).map(Number);
+    const reach = withOpenGates(ids, parseWhen(req.query["date"], req.query["time"]));
+    const rows = reach.map((id) => getFeature(id)).filter((f): f is FeatureRow => !!f);
+    res.json({
+      ids: reach,
+      names: rows.map((f) => f.name),
+      added: rows.filter((f) => !ids.includes(f.id)).map((f) => f.name),
+      area_ha: Math.round(rows.reduce((t, f) => t + (f.area_ha ?? 0), 0)),
+    });
+  } catch (e) {
+    res.status(400).json({ error: e instanceof StockError ? e.message : "Couldn't work that out" });
+  }
+});
+
 stockApi.post("/actions/move", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as Record<string, unknown>;
   act(res, () => {
