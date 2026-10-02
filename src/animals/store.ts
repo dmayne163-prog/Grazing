@@ -160,7 +160,7 @@ function allSummaries(): AnimalSummary[] {
 
 /* ---------------------------------- edit --------------------------------- */
 
-const SEXES = ["female", "male", "steer"];
+const SEXES = ["female", "male", "steer", "stag"];
 
 /** Corrects or fills in what an animal is: tags, sex, breed, birth date, origin. */
 export function updateAnimal(id: number, input: Record<string, unknown>): void {
@@ -557,6 +557,12 @@ export function commitSession(
         addAnimalEvent(a.id, { date: d, kind: "note", text: r.notes, session_id: sid }, `session:${sid}`, username, batch);
       }
       if (r.score !== null) addAnimalEvent(a.id, { date: d, kind: "score", score: r.score, session_id: sid }, `session:${sid}`, username, batch);
+      // The reader's draft and every data field, for reports to filter on.
+      const fieldIns = db.prepare("INSERT INTO session_fields (session_id, animal_id, field, value, batch) VALUES (?, ?, ?, ?, ?)");
+      if (r.draft) fieldIns.run(sid, a.id, "Draft", r.draft, batch);
+      for (const [k, v] of Object.entries(r.fields ?? {})) fieldIns.run(sid, a.id, k, v, batch);
+      // Sex from the scales fills in an animal that has none; it never overwrites one set by hand.
+      if (r.sex && !a.sex) db.prepare("UPDATE animals SET sex = ?, updated_at = ? WHERE id = ?").run(r.sex, now, a.id);
       // A sale session: each animal is recorded as sold on the day. Mob head
       // counts are left alone — for past sales the mob history already has
       // them, from AgriWebb or from before records began.

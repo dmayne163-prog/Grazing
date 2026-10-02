@@ -123,7 +123,7 @@ export function openMoveDialog(ctx, m, dest) {
           </div>
           <div class="f"><label for="mvName">Name for the ones moved</label><input id="mvName" value="${escapeHtml(`${m.name} (draft)`)}" autocomplete="off"></div>
           ${m.sex ? "" : `<div class="f"><label for="mvSex">Sex of the ones moved</label>
-            <select id="mvSex"><option value="">mixed / unknown</option><option value="female">female</option><option value="steer">steer</option><option value="male">male</option></select></div>`}
+            <select id="mvSex"><option value="">mixed / unknown</option><option value="female">female</option><option value="steer">steer</option><option value="male">male</option><option value="stag">stag</option></select></div>`}
           <div class="f"><label for="mvWhich">Which ones</label>
             <textarea id="mvWhich" rows="3" placeholder="Paste EIDs or visual tags (one per line, or separated by commas) to draft exactly those animals. Or just describe them, e.g. the 20 lightest."></textarea>
             <div id="mvMatch" class="small"></div>
@@ -577,7 +577,7 @@ export function mobPageHtml(ctx, m) {
             <datalist id="mOwners">${owners.map((o) => `<option value="${escapeHtml(o)}">`).join("")}</datalist>
           </div>
           <div class="f"><label for="mSex">Sex</label>
-            <select id="mSex">${["", "female", "steer", "male"].map((v) => `<option value="${v}"${v === (m.sex || "") ? " selected" : ""}>${v || "mixed / unknown"}</option>`).join("")}</select>
+            <select id="mSex">${["", "female", "steer", "male", "stag"].map((v) => `<option value="${v}"${v === (m.sex || "") ? " selected" : ""}>${v || "mixed / unknown"}</option>`).join("")}</select>
           </div>
         </div>
         <div class="f"><label for="mDesc">Description</label><textarea id="mDesc">${escapeHtml(m.description || "")}</textarea></div>

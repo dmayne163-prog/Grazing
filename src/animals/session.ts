@@ -19,6 +19,13 @@ export interface SessionRow {
   score: number | null;
   draft: string | null;
   notes: string | null;
+  /** Sex as the scales recorded it, mapped to the app's: female, steer or male. */
+  sex: string | null;
+  /**
+   * Every other column the scales sent — the TWR-5's data fields ("Sending to
+   * Hewitt Foods", "Days on Feed Start", vaccinations…) — kept by heading.
+   */
+  fields: Record<string, string>;
 }
 
 export interface ParsedSession {
@@ -59,7 +66,7 @@ function parseCsv(text: string): string[][] {
 
 const key = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-const COLUMNS: Record<keyof Omit<SessionRow, "i">, string[]> = {
+const COLUMNS: Record<keyof Omit<SessionRow, "i" | "fields">, string[]> = {
   eid: ["electronicid", "eid", "rfid", "electronicidnumber"],
   tag: ["tagnumber", "vid", "visualid", "managementtag", "tag", "visualtag"],
   nlis: ["nlis", "nlisid", "nlisnumber"],
@@ -68,7 +75,26 @@ const COLUMNS: Record<keyof Omit<SessionRow, "i">, string[]> = {
   score: ["conditionscore", "cs", "bodyconditionscore", "score"],
   draft: ["draft", "draftgroup"],
   notes: ["notes", "note", "comments", "comment"],
+  sex: ["sex", "gender"],
 };
+
+/** Columns that aren't data fields: the reader's own working, or a report's. */
+const NOT_FIELDS = new Set(["time", "statistics", "averagedailygain", "overalldailygain", "currentadg", "lastweight"]);
+
+/**
+ * Sex as the scales or APS write it, to the app's three. "Desexed M" is a
+ * steer; "Desexed F" a spayed heifer, still a female here; a stag is its own.
+ */
+export function mapSex(raw: string | null): string | null {
+  if (!raw) return null;
+  const k = raw.trim().toLowerCase().replace(/[^a-z]/g, "");
+  if (["female", "f", "heifer", "cow", "desexedf", "spayed", "spayedf"].includes(k)) return "female";
+  if (["steer", "s", "desexedm", "castrate", "bullock"].includes(k)) return "steer";
+  if (["male", "m", "bull"].includes(k)) return "male";
+  // A stag: castration not complete. Neither steer nor bull, and priced as neither.
+  if (k === "stag") return "stag";
+  return null;
+}
 
 /** An EID as its digits only: "982 123798726941" → "982123798726941". */
 export function normaliseEid(raw: string | null): string | null {
@@ -107,6 +133,13 @@ export function parseSession(filename: string, text: string): ParsedSession {
     const d = cell(r, "date");
     const weight = w !== null && Number.isFinite(Number(w)) && Number(w) > 0 ? Number(w) : null;
     const score = sc !== null && Number.isFinite(Number(sc)) && Number(sc) > 0 ? Number(sc) : null;
+    const fields: Record<string, string> = {};
+    table[0]!.forEach((h, j) => {
+      const k = key(h);
+      if (!k || NOT_FIELDS.has(k) || Object.values(at).includes(j)) return;
+      const v = (r[j] ?? "").trim();
+      if (v !== "") fields[h.trim()] = v.slice(0, 200);
+    });
     return {
       i,
       eid: normaliseEid(cell(r, "eid")),
@@ -117,6 +150,8 @@ export function parseSession(filename: string, text: string): ParsedSession {
       score,
       draft: cell(r, "draft"),
       notes: cell(r, "notes"),
+      sex: mapSex(cell(r, "sex")),
+      fields,
     };
   }).filter((r) => r.eid || r.tag || r.nlis);
   if (rows.length === 0) throw new ImportError("No animal in the file has an EID, tag or NLIS number");

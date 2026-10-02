@@ -179,7 +179,7 @@ export function draftMob(mobId: number, input: DraftInput, when: When, username:
   if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1500)) {
     throw new StockError("Weight must be in kg, between 1 and 1500");
   }
-  const sex = ["female", "male", "steer"].includes(String(input.sex)) ? String(input.sex) : parent.mob.sex;
+  const sex = ["female", "male", "steer", "stag"].includes(String(input.sex)) ? String(input.sex) : parent.mob.sex;
   const note = clean(input.note, 500);
   const p: MobRow = parent.mob;
   const batch = randomUUID();
@@ -327,6 +327,7 @@ export function undoBatch(batch: string): { events: number; mobs: number; gates:
     const mobs = db.prepare("DELETE FROM mobs WHERE batch = ?").run(batch).changes;
     const animalEvents = db.prepare("DELETE FROM animal_events WHERE batch = ?").run(batch).changes;
     const animals = db.prepare("DELETE FROM animals WHERE batch = ?").run(batch).changes;
+    db.prepare("DELETE FROM session_fields WHERE batch = ?").run(batch);
     const sessions = db.prepare("DELETE FROM weigh_sessions WHERE batch = ?").run(batch).changes;
     if (events + gates + mobs + animalEvents + animals + sessions === 0) {
       throw new StockError("Nothing to undo — it may already have been undone");

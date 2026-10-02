@@ -329,7 +329,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
                 <td class="nowrap">${r.m.weight_kg != null ? `${Math.round(r.m.weight_kg)} kg` : "—"}<div class="muted tiny">${escapeHtml(r.m.last_weighed || "")}</div></td>
                 <td>${r.m.paddock_names.map((n) => r.m.unmatched_paddocks.includes(n) ? `<span class="bad">${escapeHtml(n)}</span>` : escapeHtml(n)).join(", ")}</td>
                 <td><select data-sex>
-                  ${["", "female", "steer", "male"].map((v) => `<option value="${v}"${v === r.sex ? " selected" : ""}>${v || "mixed / ?"}</option>`).join("")}
+                  ${["", "female", "steer", "male", "stag"].map((v) => `<option value="${v}"${v === r.sex ? " selected" : ""}>${v || "mixed / ?"}</option>`).join("")}
                 </select></td>
                 <td><input type="text" data-owner value="${escapeHtml(r.owner)}" placeholder="own stock"></td>
               </tr>

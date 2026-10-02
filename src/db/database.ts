@@ -342,6 +342,28 @@ CREATE TABLE IF NOT EXISTS optiweigh_sessions (
   updated_at  INTEGER NOT NULL
 );
 
+-- What the scales recorded about each animal in a session beyond its weight:
+-- the reader's draft and every data field (the TWR-5's name for APS's traits
+-- and activities) — "Sending to Hewitt Foods = Yes", "7in1 vacc", and so on.
+-- Reports filter on these.
+CREATE TABLE IF NOT EXISTS session_fields (
+  session_id INTEGER NOT NULL,
+  animal_id  INTEGER NOT NULL,
+  field      TEXT    NOT NULL,
+  value      TEXT    NOT NULL,
+  batch      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_fields_field ON session_fields(field, value);
+CREATE INDEX IF NOT EXISTS idx_session_fields_animal ON session_fields(animal_id);
+
+-- Saved report setups: the filters, columns and dressing % of a report run again and again.
+CREATE TABLE IF NOT EXISTS report_presets (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+  spec       TEXT    NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

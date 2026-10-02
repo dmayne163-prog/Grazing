@@ -568,3 +568,28 @@ ul.gatefind .pick input{margin-top:4px}
 .chip.strongchip{background:var(--good-bg);color:var(--good)}
 /* Rows in a pick list read as plain text, not as form labels. */
 .f .checklist label{text-transform:none;letter-spacing:normal;font-weight:400;font-size:13px;color:var(--ink);margin:0}
+
+/* ---------------------------------- reports --------------------------------- */
+dialog .dlg.wide{max-width:980px}
+dialog:has(.dlg.wide){width:min(980px, calc(100vw - 24px))}
+.row3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+@media (max-width:640px){ .row3{grid-template-columns:1fr} }
+.chips{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0}
+.rule{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:0 0 8px}
+.rulehead{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.checklist.short{max-height:150px}
+.report-table tfoot td{font-weight:650;border-top:1px solid var(--line)}
+.print-only{display:none}
+/* Printing a report: just the report, on white. */
+@media print {
+  body.printing-report > :not(#dialog){display:none !important}
+  body.printing-report{background:#fff}
+  body.printing-report #dialog{position:static;display:block;border:0;padding:0;margin:0;max-width:none;width:auto;max-height:none;background:#fff;color:#000;box-shadow:none}
+  body.printing-report #dialog::backdrop{display:none}
+  body.printing-report .dlg{max-height:none;overflow:visible}
+  body.printing-report .dlg .body{overflow:visible;padding:0}
+  body.printing-report .no-print{display:none !important}
+  body.printing-report .print-only{display:block}
+  body.printing-report .report-table{font-size:11px;color:#000}
+  body.printing-report .report-table th,body.printing-report .report-table td{color:#000;border-color:#bbb}
+}

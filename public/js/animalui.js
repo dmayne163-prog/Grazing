@@ -5,6 +5,7 @@
  * Uses the same `ctx` as stockui.js, plus ctx.selectAnimal(id).
  */
 import { get, send } from "./api.js";
+import { openReports } from "./reports.js";
 import { escapeHtml } from "./map.js";
 import { bindWhen, readWhen, showError, undoable, whenHtml } from "./stockui.js";
 
@@ -23,7 +24,7 @@ const age = (birth) => {
   const months = Math.floor((Date.now() - Date.parse(`${birth}T00:00:00`)) / (30.44 * 86_400_000));
   return months < 24 ? `${months} months` : `${Math.floor(months / 12)} yr ${months % 12} mo`;
 };
-const SEX = { female: "Female", male: "Bull / male", steer: "Steer" };
+const SEX = { female: "Female", male: "Bull / male", steer: "Steer", stag: "Stag" };
 
 /* --------------------------------- page ------------------------------------ */
 
@@ -48,7 +49,7 @@ export async function renderAnimal(ctx, id, root) {
     <p class="animalline">${a.sex
       ? `<b>${escapeHtml(SEX[a.sex])}</b>`
       : ctx.canEdit
-        ? `<span class="muted">Sex not recorded:</span> ${["female", "steer", "male"].map((x) => `<button class="chipbtn" data-sex="${x}">${SEX[x]}</button>`).join("")}`
+        ? `<span class="muted">Sex not recorded:</span> ${["female", "steer", "male", "stag"].map((x) => `<button class="chipbtn" data-sex="${x}">${SEX[x]}</button>`).join("")}`
         : '<span class="muted">Sex not recorded</span>'}${[a.breed, a.birth_date ? age(a.birth_date) : null].filter(Boolean).map((t) => ` · ${escapeHtml(t)}`).join("")}</p>
     <p class="sub">${[a.eid ? `EID ${escapeHtml(eidText(a.eid))}` : null, a.nlis ? `NLIS ${escapeHtml(a.nlis)}` : null].filter(Boolean).join(" · ") || "No EID recorded"}</p>
 
@@ -79,7 +80,7 @@ export async function renderAnimal(ctx, id, root) {
     ${ctx.canEdit ? `<details><summary class="small">Edit details</summary>
       <div class="row2">
         <div class="f"><label for="dTag">Tag</label><input id="dTag" value="${escapeHtml(a.tag || "")}" autocomplete="off"></div>
-        <div class="f"><label for="dSex">Sex</label><select id="dSex">${["", "female", "steer", "male"].map((x) => `<option value="${x}"${x === (a.sex || "") ? " selected" : ""}>${x ? SEX[x] : "unknown"}</option>`).join("")}</select></div>
+        <div class="f"><label for="dSex">Sex</label><select id="dSex">${["", "female", "steer", "male", "stag"].map((x) => `<option value="${x}"${x === (a.sex || "") ? " selected" : ""}>${x ? SEX[x] : "unknown"}</option>`).join("")}</select></div>
       </div>
       <div class="row2">
         <div class="f"><label for="dBreed">Breed</label><input id="dBreed" value="${escapeHtml(a.breed || "")}" autocomplete="off"></div>
@@ -295,7 +296,7 @@ export async function loadMobAnimals(ctx, m, el) {
       : alive.length < m.head ? `<p class="muted tiny">${m.head - alive.length} hd have no individual record yet.</p>` : ""}
     ${ctx.canEdit && alive.some((a) => !a.sex) ? `<div class="setsex small">
       <span>${alive.filter((a) => !a.sex).length} without a sex recorded. Set them all to</span>
-      ${["female", "steer", "male"].map((x) => `<button class="chipbtn" data-mobsex="${x}">${SEX[x]}</button>`).join("")}
+      ${["female", "steer", "male", "stag"].map((x) => `<button class="chipbtn" data-mobsex="${x}">${SEX[x]}</button>`).join("")}
     </div>` : ""}
     <table class="list"><tbody>${list.map((a) => `
       <tr class="row" data-animal="${a.id}"><td>${escapeHtml(a.tag || eidText(a.eid))}${a.status !== "alive" ? ` <span class="chip">${a.status}</span>` : ""}</td>
@@ -341,7 +342,8 @@ export async function renderAnimalsTab(ctx, el) {
       <select id="anMob" aria-label="Mob"><option value="">All mobs</option>${mobs.map((m) => `<option value="${m.id}"${String(m.id) === f.mob ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}</select>
     </div>
     <div id="anList"><p class="muted small">Loading…</p></div>
-    ${ctx.canEdit ? '<div class="btns"><button class="btn" data-import="session">Import a cattle session…</button></div>' : ""}`;
+    <div class="btns"><button class="btn" id="anReports">Reports…</button>${ctx.canEdit ? '<button class="btn" data-import="session">Import a cattle session…</button>' : ""}</div>`;
+  el.querySelector("#anReports").onclick = () => openReports(ctx);
 
   const list = el.querySelector("#anList");
   let seq = 0;

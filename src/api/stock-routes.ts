@@ -660,7 +660,7 @@ function commitMobs(row: ImportRow, body: unknown, username: string | null) {
       species: m.species,
       breed: m.breed,
       age_class: m.age_class,
-      sex: ["female", "male", "steer"].includes(String(d["sex"])) ? String(d["sex"]) : m.sex,
+      sex: ["female", "male", "steer", "stag"].includes(String(d["sex"])) ? String(d["sex"]) : m.sex,
       tag_colour: m.tag_colour,
       management_tag: m.management_tag,
       origin: m.origin,

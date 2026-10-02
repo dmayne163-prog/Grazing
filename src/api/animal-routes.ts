@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { assignSession, lastSync, listSessions, optiweighConfigured, syncOptiweigh, syncRunning } from "../animals/optiweigh-sync.js";
+import { reportOptions, runReport, type ReportSpec } from "../animals/report.js";
 import { logger } from "../logger.js";
 import {
   animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, setSexForMob, updateAnimal, weighAnimal,
@@ -114,4 +115,37 @@ animalApi.put("/optiweigh/sessions/:id", requireAdmin, (req, res) => {
 animalApi.post("/optiweigh/sync", requireAdmin, (req, res) => {
   void syncOptiweigh(req.user?.username ?? null);
   res.json({ ok: true, started: true });
+});
+
+/* --------------------------------- reports --------------------------------- */
+
+animalApi.get("/reports/options", (_req, res) => {
+  res.json({ ...reportOptions(), presets: db.prepare("SELECT id, name, spec FROM report_presets ORDER BY name").all().map((p) => ({ ...(p as { id: number; name: string; spec: string }), spec: JSON.parse((p as { spec: string }).spec) })) });
+});
+
+animalApi.post("/reports/run", (req, res) => {
+  try {
+    res.json(runReport((req.body ?? {}) as ReportSpec));
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    log.error("report failed", e);
+    res.status(500).json({ error: "The report couldn't be run" });
+  }
+});
+
+/** Saves a report's setup under a name, replacing one of the same name. */
+animalApi.put("/reports/presets", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const name = typeof b["name"] === "string" ? b["name"].trim().slice(0, 80) : "";
+  if (!name || typeof b["spec"] !== "object" || b["spec"] === null) { res.status(400).json({ error: "Give the report a name" }); return; }
+  db.prepare(`
+    INSERT INTO report_presets (name, spec, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET spec = excluded.spec, updated_at = excluded.updated_at
+  `).run(name, JSON.stringify(b["spec"]), Date.now());
+  res.json({ ok: true });
+});
+
+animalApi.delete("/reports/presets/:id", requireAdmin, (req, res) => {
+  db.prepare("DELETE FROM report_presets WHERE id = ?").run(Number(req.params["id"]));
+  res.json({ ok: true });
 });

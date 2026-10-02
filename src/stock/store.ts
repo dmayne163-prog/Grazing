@@ -329,7 +329,7 @@ export function updateMob(id: number, edit: MobEdit): MobRow | null {
   const name = edit.name !== undefined ? text(edit.name, 120) ?? cur.name : cur.name;
   const owner = edit.owner !== undefined ? text(edit.owner, 120) : cur.owner;
   const sex = edit.sex !== undefined
-    ? (["female", "male", "steer"].includes(String(edit.sex)) ? String(edit.sex) : null)
+    ? (["female", "male", "steer", "stag"].includes(String(edit.sex)) ? String(edit.sex) : null)
     : cur.sex;
   const description = edit.description !== undefined ? text(edit.description, 2000) : cur.description;
   db.prepare(
