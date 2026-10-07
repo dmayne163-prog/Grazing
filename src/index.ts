@@ -12,6 +12,7 @@ import { climateApi } from "./api/climate-routes.js";
 import { pastureApi } from "./api/pasture-routes.js";
 import { startClimateSync } from "./climate/silo.js";
 import { startOptiweighSync } from "./animals/optiweigh-sync.js";
+import { startAutoGauge } from "./rain/autogauge.js";
 import { reconcileAllMobWeights } from "./animals/store.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
@@ -111,6 +112,7 @@ const rateLimitSweeper = startRateLimitSweeper();
 const backupTimer = startBackups();
 const climateTimer = startClimateSync();
 const optiweighTimer = startOptiweighSync();
+const rainGauge = startAutoGauge();
 // Mobs whose animals were weighed more recently than the mob itself catch up.
 setTimeout(() => {
   try {
@@ -153,6 +155,7 @@ function shutdown(signal: string) {
   clearInterval(backupTimer);
   clearInterval(climateTimer);
   clearInterval(optiweighTimer);
+  rainGauge?.end(true);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3_000).unref();
 }

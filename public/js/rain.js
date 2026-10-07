@@ -43,9 +43,11 @@ function lastMonths(n) {
 }
 
 export async function renderRain(el, { canEdit, toast }) {
-  let data, clim;
+  let data, clim, auto;
   try {
-    [data, clim] = await Promise.all([get("/api/rain"), get("/api/climate/rain").catch(() => null)]);
+    [data, clim, auto] = await Promise.all([
+      get("/api/rain"), get("/api/climate/rain").catch(() => null), get("/api/rain/auto").catch(() => null),
+    ]);
   } catch (e) {
     el.innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`;
     return;
@@ -80,7 +82,8 @@ export async function renderRain(el, { canEdit, toast }) {
   const last12 = monthly.slice(-12).reduce((t, m) => t + (gauge ? m.by_gauge[gauge.id] || 0 : 0), 0);
   const ytd = monthly.filter((m) => m.month.startsWith(year)).reduce((t, m) => t + (gauge ? m.by_gauge[gauge.id] || 0 : 0), 0);
   const lastRain = mine.find((r) => r.mm > 0);
-  const daysSince = lastRain ? Math.round((Date.parse(`${localToday()}T00:00:00`) - Date.parse(`${lastRain.date}T00:00:00`)) / 86_400_000) : null;
+  const daysSince = lastRain ? Math.max(0, Math.round((Date.parse(`${localToday()}T00:00:00`) - Date.parse(`${lastRain.date}T00:00:00`)) / 86_400_000)) : null;
+  const isAuto = !!auto?.configured && gauge?.name.toLowerCase() === auto.gauge.toLowerCase();
   const covered = monthly.length && monthly.length < 12 ? ` <span class="muted">(records start ${monthLabel(monthly[0].month)})</span>` : "";
   const win = (n) => clim?.windows?.find((w) => w.days === n);
   const winHtml = (w) => w
@@ -94,6 +97,8 @@ export async function renderRain(el, { canEdit, toast }) {
       <dt>${year} so far</dt><dd>${mm0(ytd)}</dd>
       <dt>Last rain</dt><dd>${lastRain ? `${lastRain.mm} mm on ${dayLabel(lastRain.date)} (${daysSince} days ago)` : "—"}</dd>
     </dl>` : ""}
+    ${auto?.configured && (isAuto || !gauges.some((g) => g.name.toLowerCase() === auto.gauge.toLowerCase())) ? autoStatusHtml(auto) : ""}
+    ${isAuto ? compareHtml(readings, gauge, gauges) : ""}
     ${haveSilo ? `
     <h3>Against the long record · SILO</h3>
     <dl class="facts">
@@ -123,10 +128,10 @@ export async function renderRain(el, { canEdit, toast }) {
       </tbody></table>
     </details>` : ""}
     ${siloStatusHtml(clim, canEdit)}
-    ${canEdit ? formHtml(gauges, gauge) : ""}
+    ${canEdit ? formHtml(gauges, isAuto ? handGauge(gauges, gauge) : gauge) : ""}
     ${gauge ? `<h3>Readings</h3>
     <table class="list"><tbody>${mine.slice(0, 60).map((r) => `
-      <tr><td>${dayLabel(r.date)}${r.time ? ` <span class="muted">${escapeHtml(r.time)}</span>` : ""}${r.note ? `<div class="muted tiny">${escapeHtml(r.note)}</div>` : ""}</td>
+      <tr><td>${dayLabel(r.date)}${r.date > localToday() ? ' <span class="muted">so far</span>' : ""}${r.time ? ` <span class="muted">${escapeHtml(r.time)}</span>` : ""}${r.note ? `<div class="muted tiny">${escapeHtml(r.note)}</div>` : ""}</td>
         <td class="num">${r.mm} mm</td>
         ${canEdit ? `<td class="num"><button class="linkbtn danger-link" data-del="${r.id}" aria-label="Delete this reading">Delete</button></td>` : ""}
       </tr>`).join("")}</tbody></table>
@@ -164,6 +169,55 @@ export async function renderRain(el, { canEdit, toast }) {
       };
     });
   }
+}
+
+/** Whether the automatic gauge is reaching its Cerbo, and what it has counted. */
+function autoStatusHtml(a) {
+  const when = (ts) => new Date(ts).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  const state = !a.connected
+    ? `<span class="bad">Can't reach the Cerbo${a.error ? ` (${escapeHtml(a.error)})` : ""}.</span> It keeps counting; the app catches up when it's back.`
+    : !a.meters.length
+      ? "Connected to the Cerbo, waiting for a pulse meter: set the gauge's digital input to <b>Pulse meter</b>."
+      : `Counting tips on pulse meter ${a.instance ?? a.meters[0]}, ${a.mm_per_tip} mm each. ${a.since_9am_mm} mm since 9am${a.last_tip_at ? `, last tip ${when(a.last_tip_at)}` : ""}.`;
+  return `<p class="muted tiny gap-top"><b>${escapeHtml(a.gauge)}:</b> ${state}</p>`;
+}
+
+/**
+ * The automatic gauge beside another, rain day by rain day (9am to 9am), from
+ * the automatic gauge's first reading on: what decides whether it can be
+ * trusted to replace the manual one.
+ */
+function compareHtml(readings, gauge, gauges) {
+  const others = gauges.filter((g) => g.id !== gauge.id);
+  if (!others.length) return "";
+  const other = handGauge(gauges, gauge);
+  const mine = readings.filter((r) => r.gauge_id === gauge.id);
+  if (!mine.length) return "";
+  const from = mine[mine.length - 1].date;
+  const day = new Map();
+  for (const r of readings) {
+    if (r.date < from || (r.gauge_id !== gauge.id && r.gauge_id !== other.id)) continue;
+    const d = day.get(r.date) || { a: 0, m: null };
+    if (r.gauge_id === gauge.id) d.a += r.mm; else d.m = (d.m || 0) + r.mm;
+    day.set(r.date, d);
+  }
+  const rows = [...day].filter(([, d]) => d.a > 0 || d.m > 0).sort((x, y) => y[0].localeCompare(x[0]));
+  if (!rows.length) return "";
+  const both = rows.filter(([, d]) => d.m !== null);
+  const tA = both.reduce((t, [, d]) => t + d.a, 0), tM = both.reduce((t, [, d]) => t + d.m, 0);
+  const diff = (a, m) => (m === null ? "—" : `${a - m >= 0 ? "+" : "−"}${Math.abs(Math.round((a - m) * 10) / 10)}`);
+  return `<details class="gap-top"><summary class="small">Against ${escapeHtml(other.name)}, day by day</summary>
+    <table class="list"><thead><tr><th>Rain day <span class="muted">to 9am</span></th><th class="num">Automatic</th><th class="num">Manual</th><th class="num">Diff</th></tr></thead><tbody>
+      ${rows.slice(0, 60).map(([d, x]) => `<tr><td>${dayLabel(d)}</td><td class="num">${Math.round(x.a * 10) / 10}</td><td class="num">${x.m === null ? '<span class="muted">not read</span>' : x.m}</td><td class="num">${diff(x.a, x.m)}</td></tr>`).join("")}
+    </tbody>${both.length ? `<tfoot><tr><td>${both.length} day${both.length === 1 ? "" : "s"} read on both</td><td class="num">${Math.round(tA * 10) / 10}</td><td class="num">${Math.round(tM * 10) / 10}</td><td class="num">${tM ? `${tA >= tM ? "+" : "−"}${Math.abs(Math.round(((tA - tM) / tM) * 100))}%` : "—"}</td></tr></tfoot>` : ""}</table>
+    <p class="muted tiny">Each day is the 24 hours to 9am, booked to the day it ends, the way a gauge read at 9am is. A manual reading booked to the wrong day shows as a pair of opposite differences.</p>
+  </details>`;
+}
+
+/** The gauge read by hand to set beside the automatic one: "manual" in its name, else any other. */
+function handGauge(gauges, auto) {
+  const others = gauges.filter((g) => g.id !== auto.id);
+  return others.find((g) => /manual/i.test(g.name)) || others[0] || null;
 }
 
 /** Where the SILO data is up to, and a way to fetch it now. */

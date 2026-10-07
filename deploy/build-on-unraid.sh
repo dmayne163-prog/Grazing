@@ -47,6 +47,9 @@ SILO_EMAIL="${SILO_EMAIL:-}"
 # local.env only, never git.
 OPTIWEIGH_CLIENT_ID="${OPTIWEIGH_CLIENT_ID:-}"
 OPTIWEIGH_API_KEY="${OPTIWEIGH_API_KEY:-}"
+# The automatic rain gauge's Cerbo GX: a LAN address, so local.env only.
+RAIN_CERBO_HOST="${RAIN_CERBO_HOST:-}"
+RAIN_PULSE_INSTANCE="${RAIN_PULSE_INSTANCE:-}"
 
 echo "==> building $IMAGE"
 docker build -t "$IMAGE" .
@@ -74,6 +77,8 @@ docker run -d \
   -e SILO_EMAIL="$SILO_EMAIL" \
   -e OPTIWEIGH_CLIENT_ID="$OPTIWEIGH_CLIENT_ID" \
   -e OPTIWEIGH_API_KEY="$OPTIWEIGH_API_KEY" \
+  -e RAIN_CERBO_HOST="$RAIN_CERBO_HOST" \
+  -e RAIN_PULSE_INSTANCE="$RAIN_PULSE_INSTANCE" \
   "$IMAGE"
 
 echo

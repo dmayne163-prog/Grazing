@@ -274,6 +274,16 @@ CREATE TABLE IF NOT EXISTS rain_readings (
 );
 CREATE INDEX IF NOT EXISTS idx_rain_date ON rain_readings(date);
 
+-- Tips counted by the automatic gauge, as the Cerbo GX's pulse meter reported
+-- them: when the count went up, and by how much. Each rain day's reading for
+-- that gauge is summed from these, so a deleted reading is rebuilt, not lost.
+CREATE TABLE IF NOT EXISTS rain_tips (
+  ts    INTEGER NOT NULL,   -- ms, when the new count arrived
+  tips  INTEGER NOT NULL,
+  count INTEGER NOT NULL    -- the Cerbo's running count after these tips
+);
+CREATE INDEX IF NOT EXISTS idx_rain_tips_ts ON rain_tips(ts);
+
 -- SILO's gridded daily climate (0.05°, about 5 km) for each grid point that
 -- has a paddock in it. Kept apart from rain_readings on purpose: SILO is an
 -- estimate interpolated from BOM stations, the gauges are what fell here.

@@ -124,5 +124,18 @@ export const config = {
   /** Local hour after which the day's Optiweigh fetch runs. */
   optiweighHour: num("OPTIWEIGH_HOUR", 6),
 
+  /**
+   * The automatic rain gauge: a tipping bucket wired to a pulse-meter input
+   * on a Cerbo GX, read over the Cerbo's "MQTT on LAN". The address is a LAN
+   * IP, so it lives in local.env, never in git. With none set it's off.
+   */
+  rainCerboHost: str("RAIN_CERBO_HOST", ""),
+  rainCerboPort: num("RAIN_CERBO_PORT", 1883),
+  /** Which pulse meter, when the Cerbo has more than one; blank takes the first. */
+  rainPulseInstance: str("RAIN_PULSE_INSTANCE", ""),
+  /** Rain per tip of the bucket: 0.2 mm for the RIMCO 7499-STD. */
+  rainMmPerTip: num("RAIN_MM_PER_TIP", 0.2),
+  rainGaugeName: str("RAIN_GAUGE_NAME", "House automatic gauge"),
+
   logLevel: str("LOG_LEVEL", "info"),
 };

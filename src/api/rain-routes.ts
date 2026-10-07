@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import {
   addReading, deleteReading, ensureGauge, listGauges, listReadings, RainError, renameGauge,
 } from "../rain/store.js";
+import { autoGaugeStatus } from "../rain/autogauge.js";
 
 const log = logger("rain");
 export const rainApi = Router();
@@ -87,4 +88,9 @@ rainApi.patch("/rain/gauges/:id", requireAdmin, (req, res) => {
     if (e instanceof RainError) { res.status(400).json({ error: e.message }); return; }
     res.status(500).json({ error: "Something went wrong" });
   }
+});
+
+/** The automatic gauge: whether it's reaching the Cerbo, and its count. */
+rainApi.get("/rain/auto", (_req, res) => {
+  res.json(autoGaugeStatus());
 });
