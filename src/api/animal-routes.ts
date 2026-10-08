@@ -3,6 +3,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { assignSession, lastSync, listSessions, optiweighConfigured, syncOptiweigh, syncRunning } from "../animals/optiweigh-sync.js";
 import { reportOptions, runReport, type ReportSpec } from "../animals/report.js";
+import { preRecords, ruminatiCattle, savePreRecords, setBirthByName } from "../reports/ruminati.js";
 import { logger } from "../logger.js";
 import {
   animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, setSexForMob, updateAnimal, weighAnimal,
@@ -148,4 +149,45 @@ animalApi.put("/reports/presets", requireAdmin, (req, res) => {
 animalApi.delete("/reports/presets/:id", requireAdmin, (req, res) => {
   db.prepare("DELETE FROM report_presets WHERE id = ?").run(Number(req.params["id"]));
   res.json({ ok: true });
+});
+
+/** Ruminati's Cattle page for a financial year (the year it ends), from the mob records. */
+animalApi.get("/ruminati/cattle", (req, res) => {
+  try {
+    res.json(ruminatiCattle(Number(req.query["fy"])));
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    log.error("Ruminati cattle report failed", e);
+    res.status(500).json({ error: "The report couldn't be worked out" });
+  }
+});
+
+/** Purchases and sales from before the records began, from the NVDs. */
+animalApi.put("/ruminati/pre-records", requireAdmin, (req, res) => {
+  try {
+    const before = preRecords();
+    const saved = savePreRecords((req.body as { list?: unknown })?.list);
+    addEvent({
+      ts: Date.now(), source: "ruminati", kind: "pre-records", severity: "info",
+      message: `${req.user?.username ?? "someone"} set ${saved.length} purchase/sale line(s) from before the records`, value: JSON.stringify(before),
+    });
+    res.json({ ok: true, list: saved });
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    res.status(500).json({ error: "Couldn't save those lines" });
+  }
+});
+
+/** A birth date for every mob of one name that has none (AgriWebb's split records of one line). */
+animalApi.post("/ruminati/birth", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as { name?: unknown; birth_date?: unknown };
+  try {
+    const n = setBirthByName(String(b.name ?? ""), String(b.birth_date ?? ""));
+    addEvent({ ts: Date.now(), source: "ruminati", kind: "birth-date", severity: "info",
+      message: `${req.user?.username ?? "someone"} set birth date ${String(b.birth_date)} on ${n} mob record(s) named "${String(b.name)}"`, value: null });
+    res.json({ ok: true, mobs: n });
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    res.status(500).json({ error: "Couldn't set the birth date" });
+  }
 });

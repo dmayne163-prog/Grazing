@@ -7,6 +7,7 @@ import { renderRain } from "./rain.js";
 import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
 import { openGateFinder } from "./gatefinder.js";
 import { loadOptiweigh } from "./optiweighui.js";
+import { openRuminati } from "./ruminati.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -580,6 +581,10 @@ function toolsHtml() {
       </div>
     ` : ""}
 
+    <h3>Ruminati</h3>
+    <p class="muted small">The figures Ruminati's emissions report asks for, worked out from the mob records.</p>
+    <div class="btns"><button class="btn" id="openRuminati">Cattle page inputs…</button></div>
+
     <h3>Optiweigh</h3>
     <div id="owBox"><p class="muted small">Loading…</p></div>
 
@@ -661,6 +666,8 @@ function bindOverview() {
   });
 
   loadOptiweigh(ctx, $("#owBox", body));
+  const ru = $("#openRuminati", body);
+  if (ru) ru.onclick = () => openRuminati(ctx);
   const fg = $("#findGates", body);
   if (fg) fg.onclick = () => openGateFinder($("#dialog"), {
     toast,

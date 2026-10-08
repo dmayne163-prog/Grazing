@@ -593,3 +593,10 @@ dialog:has(.dlg.wide){width:min(980px, calc(100vw - 24px))}
   body.printing-report .report-table{font-size:11px;color:#000}
   body.printing-report .report-table th,body.printing-report .report-table td{color:#000;border-color:#bbb}
 }
+
+/* Ruminati inputs */
+table.ruminati td:first-child { white-space: nowrap; }
+table.ruminati th.num, table.ruminati td.num { width: 18%; }
+.birthset { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.birthset input { width: 9.5em; padding: 2px 4px; }
+#ruPre input, #ruPre select { width: 100%; min-width: 0; }
