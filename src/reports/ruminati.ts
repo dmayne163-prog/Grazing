@@ -93,7 +93,7 @@ interface MobInfo {
  * the same name, so this is how their age is given once.
  */
 export function setBirthByName(name: string, birth: string): number {
-  if (!/^d{4}-d{2}-d{2}$/.test(birth)) throw new StockError("Give the birth date as YYYY-MM-DD");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) throw new StockError("Give the birth date as YYYY-MM-DD");
   return db.prepare("UPDATE mobs SET birth_date = ?, updated_at = ? WHERE name = ? AND birth_date IS NULL").run(birth, Date.now(), name).changes;
 }
 
