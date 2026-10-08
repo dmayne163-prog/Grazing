@@ -274,6 +274,27 @@ CREATE TABLE IF NOT EXISTS rain_readings (
 );
 CREATE INDEX IF NOT EXISTS idx_rain_date ON rain_readings(date);
 
+-- Records undone in the app that had changed a head count, kept whole (as
+-- JSON) from the moment of undoing, so the head count register still shows
+-- them. Undo deletes from mob_events; this is the audit trail of that.
+CREATE TABLE IF NOT EXISTS undone_mob_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  event     TEXT    NOT NULL,
+  undone_by TEXT,
+  undone_at INTEGER NOT NULL
+);
+
+-- Notes added to a mob record after the fact: an explanation found later for
+-- a count that didn't add up. Only ever added to, never changed.
+CREATE TABLE IF NOT EXISTS mob_event_notes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   INTEGER NOT NULL,
+  text       TEXT    NOT NULL,
+  username   TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mob_event_notes ON mob_event_notes(event_id);
+
 -- Tips counted by the automatic gauge, as the Cerbo GX's pulse meter reported
 -- them: when the count went up, and by how much. Each rain day's reading for
 -- that gauge is summed from these, so a deleted reading is rebuilt, not lost.

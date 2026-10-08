@@ -10,6 +10,7 @@ import {
   asOfFromFilename, parseAgriWebbSheet, reviewMobs,
   type MobCandidate, type MovementRow, type PaddockRowCandidate, type RainRow,
 } from "../stock/agriwebb-xlsx.js";
+import { addRegisterNote, headRegister } from "../stock/register.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
   deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
@@ -267,7 +268,7 @@ stockApi.post("/mob-events/:id/void", requireAdmin, (req, res) => {
 
 stockApi.post("/undo/:batch", requireAdmin, (req, res) => {
   act(res, () => {
-    const r = undoBatch(String(req.params["batch"]));
+    const r = undoBatch(String(req.params["batch"]), who(req));
     logAction(req, `undid an action (${r.events} record(s), ${r.mobs} mob(s), ${r.gates} gate change(s))`);
     return r;
   });
@@ -275,7 +276,7 @@ stockApi.post("/undo/:batch", requireAdmin, (req, res) => {
 
 stockApi.delete("/mob-events/:id", requireAdmin, (req, res) => {
   act(res, () => {
-    deleteAppEvent(Number(req.params["id"]));
+    deleteAppEvent(Number(req.params["id"]), who(req));
     logAction(req, `deleted mob record #${req.params["id"]}`);
     return {};
   });
@@ -807,3 +808,23 @@ function commitPaddocks(row: ImportRow, username: string | null) {
   }
   return { created: updated, summary: `${updated} paddock note${updated === 1 ? "" : "s"} added` };
 }
+
+/** Every change to a head count, with notes, for explaining the numbers at audit time. */
+stockApi.get("/register", (req, res) => {
+  const q = req.query;
+  act(res, () => headRegister({
+    from: typeof q["from"] === "string" && q["from"] ? q["from"] : undefined,
+    to: typeof q["to"] === "string" && q["to"] ? q["to"] : undefined,
+    mob_name: typeof q["mob"] === "string" && q["mob"] ? q["mob"] : undefined,
+    property_only: q["property"] === "1",
+  }));
+});
+
+/** A note added to a record afterwards. Notes are only ever added, never changed. */
+stockApi.post("/mob-events/:id/notes", requireAdmin, (req, res) => {
+  act(res, () => {
+    addRegisterNote(Number(req.params["id"]), (req.body as { text?: unknown })?.text, who(req));
+    logAction(req, `added a note to mob record #${req.params["id"]}`);
+    return {};
+  });
+});

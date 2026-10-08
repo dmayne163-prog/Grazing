@@ -600,3 +600,8 @@ table.ruminati th.num, table.ruminati td.num { width: 18%; }
 .birthset { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
 .birthset input { width: 9.5em; padding: 2px 4px; }
 #ruPre input, #ruPre select { width: 100%; min-width: 0; }
+
+/* Head count register */
+table.register td { vertical-align: top; }
+table.register tr.voided td { opacity: 0.6; }
+table.register tr.voided td:nth-child(4) { text-decoration: line-through; }

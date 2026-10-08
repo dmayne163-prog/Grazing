@@ -12,6 +12,7 @@ import { db } from "../db/database.js";
 import { getFeature, listFeatures } from "../map/store.js";
 import { gateInfo, gateStateAt, isGate } from "../map/gates.js";
 import { addEvent, createMobWithEvents, mobViews, today, type MobRow, type MobView } from "./store.js";
+import { keepUndone } from "./register.js";
 
 export class StockError extends Error {}
 
@@ -302,7 +303,7 @@ export function setGate(
  * unless something has been recorded against it since, in which case that has
  * to be undone first, or the undo would throw away records it never made.
  */
-export function undoBatch(batch: string): { events: number; mobs: number; gates: number; animals: number; sessions: number } {
+export function undoBatch(batch: string, username: string | null = null): { events: number; mobs: number; gates: number; animals: number; sessions: number } {
   if (!/^[0-9a-f-]{36}$/.test(batch)) throw new StockError("Nothing to undo");
   return db.transaction(() => {
     const created = db.prepare("SELECT id, name FROM mobs WHERE batch = ?").all(batch) as Array<{ id: number; name: string }>;
@@ -322,6 +323,7 @@ export function undoBatch(batch: string): { events: number; mobs: number; gates:
         throw new StockError(`Animal ${a.tag ?? a.eid} has had other things recorded since; undo those first`);
       }
     }
+    keepUndone("batch = ?", batch, username);
     const events = db.prepare("DELETE FROM mob_events WHERE batch = ?").run(batch).changes;
     const gates = db.prepare("DELETE FROM gate_events WHERE batch = ?").run(batch).changes;
     const mobs = db.prepare("DELETE FROM mobs WHERE batch = ?").run(batch).changes;
@@ -341,11 +343,12 @@ export function undoBatch(batch: string): { events: number; mobs: number; gates:
  * records are not deletable here: they came from AgriWebb and are the record
  * of what happened.
  */
-export function deleteAppEvent(id: number): void {
+export function deleteAppEvent(id: number, username: string | null = null): void {
   const e = db.prepare("SELECT source, batch FROM mob_events WHERE id = ?").get(id) as { source: string; batch: string | null } | undefined;
   if (!e) throw new StockError("No such record");
-  if (e.batch) { undoBatch(e.batch); return; }
+  if (e.batch) { undoBatch(e.batch, username); return; }
   if (e.source !== "app") throw new StockError("Imported records can't be deleted here");
+  keepUndone("id = ?", id, username);
   db.prepare("DELETE FROM mob_events WHERE id = ?").run(id);
 }
 

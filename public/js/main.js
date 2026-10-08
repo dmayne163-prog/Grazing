@@ -8,6 +8,7 @@ import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
 import { openGateFinder } from "./gatefinder.js";
 import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
+import { openRegister } from "./register.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -666,6 +667,8 @@ function bindOverview() {
   });
 
   loadOptiweigh(ctx, $("#owBox", body));
+  const reg = $("#openRegister", body);
+  if (reg) reg.onclick = () => openRegister(ctx);
   const ru = $("#openRuminati", body);
   if (ru) ru.onclick = () => openRuminati(ctx);
   const fg = $("#findGates", body);
@@ -1211,9 +1214,8 @@ start();
 /* ---------------------------------- mobs ----------------------------------- */
 
 function mobsTable() {
-  const importBtn = canEdit()
-    ? `<div class="btns"><button class="btn" data-import="session">Import a cattle session…</button></div>`
-    : "";
+  const importBtn = `<div class="btns"><button class="btn" id="openRegister">Head count register…</button>${canEdit()
+    ? '<button class="btn" data-import="session">Import a cattle session…</button>' : ""}</div>`;
   if (state.mobs.length === 0) {
     return `<p class="muted small">No mobs yet. ${canEdit() ? "Import AgriWebb's mob list (.xlsx) from <b>Tools</b>." : ""}</p>`;
   }
