@@ -265,5 +265,5 @@ export function addFromNlis(pic: string | null, date: string, mobId: number, sex
       addAnimalEvent(id, { date: joinDate, kind: "join", mob_id: mobId, data: { from: `NLIS arrival from ${origin} ${date}`, nvd: r.nvd } }, "nlis", username, batch);
     }
   })();
-  return { batch, added: rows.length, summary: `${rows.length} animal records from the NLIS arrival from ${origin} on ${date}, in ${mob.name}` };
+  return { batch, added: rows.length, summary: `added ${rows.length} animal records from the NLIS arrival from ${origin} on ${date}, in ${mob.name}` };
 }
