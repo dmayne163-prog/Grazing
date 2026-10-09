@@ -3,6 +3,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { assignSession, lastSync, listSessions, optiweighConfigured, syncOptiweigh, syncRunning } from "../animals/optiweigh-sync.js";
 import { reportOptions, runReport, type ReportSpec } from "../animals/report.js";
+import { placeGroup, unplacedGroups } from "../animals/place.js";
 import { preRecords, ruminatiCattle, savePreRecords, setBirthByName, setUnweaned } from "../reports/ruminati.js";
 import { logger } from "../logger.js";
 import {
@@ -37,6 +38,22 @@ animalApi.get("/animals", (req, res) => {
     status: typeof req.query["status"] === "string" ? req.query["status"] : "alive",
     mob: Number.isInteger(mob) ? mob : null,
   }));
+});
+
+/** Animals not in any mob here, grouped by the session they were last seen in. */
+animalApi.get("/animals/unplaced", (_req, res) => {
+  res.json({ groups: unplacedGroups() });
+});
+
+/** Puts one of those groups into a mob, or records it as off the books. */
+animalApi.post("/animals/unplaced/place", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as { session_id?: unknown; mob_id?: unknown };
+  const sid = b.session_id === null || b.session_id === undefined ? null : Number(b.session_id);
+  const target = b.mob_id === "gone" ? "gone" as const : Number(b.mob_id);
+  act(req, res, `placed animals last seen in session #${sid ?? "none"} (${String(b.mob_id)})`, () => {
+    if (target !== "gone" && !Number.isInteger(target)) throw new StockError("Choose a mob");
+    return placeGroup(sid, target, who(req));
+  });
 });
 
 animalApi.patch("/animals/:id", requireAdmin, (req, res) => {
@@ -202,3 +219,4 @@ animalApi.post("/ruminati/unweaned", requireAdmin, (req, res) => {
     res.status(500).json({ error: "Couldn't save that" });
   }
 });
+

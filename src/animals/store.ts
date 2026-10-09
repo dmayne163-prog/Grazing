@@ -148,7 +148,7 @@ export function listAnimals(opts: { q?: string; status?: string; mob?: number | 
 }
 
 /** Every animal, its events read in one pass rather than one query each. */
-function allSummaries(): AnimalSummary[] {
+export function allSummaries(): AnimalSummary[] {
   const byAnimal = new Map<number, AnimalEventRow[]>();
   for (const e of db.prepare(`SELECT * FROM animal_events ORDER BY ${ORDER}`).all() as AnimalEventRow[]) {
     const list = byAnimal.get(e.animal_id);

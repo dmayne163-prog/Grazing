@@ -341,11 +341,48 @@ export async function renderAnimalsTab(ctx, el) {
       </select>
       <select id="anMob" aria-label="Mob"><option value="">All mobs</option>${mobs.map((m) => `<option value="${m.id}"${String(m.id) === f.mob ? " selected" : ""}>${escapeHtml(m.name)}</option>`).join("")}</select>
     </div>
+    <div id="anGroups"></div>
     <div id="anList"><p class="muted small">Loading…</p></div>
     <div class="btns"><button class="btn" id="anReports">Reports…</button>${ctx.canEdit ? '<button class="btn" data-import="session">Import a cattle session…</button>' : ""}</div>`;
   el.querySelector("#anReports").onclick = () => openReports(ctx);
 
   const list = el.querySelector("#anList");
+  const groupsEl = el.querySelector("#anGroups");
+  // "Not in a mob": the lots an import couldn't place, to put in their mob in one go.
+  const loadGroups = async () => {
+    groupsEl.innerHTML = "";
+    if (f.status !== "unplaced" || !ctx.canEdit) return;
+    let g;
+    try { g = (await get("/api/animals/unplaced")).groups; } catch { return; }
+    if (!g.length) return;
+    const day = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "");
+    groupsEl.innerHTML = `<h3>Put in a mob</h3>
+      <p class="muted small">Grouped by the session each was last seen in. Records only: no mob's head count changes. One Undo reverses each.</p>
+      <table class="list"><tbody>${g.map((x, i) => `<tr>
+        <td><b>${x.head}</b> hd · ${escapeHtml(x.name)} <span class="muted">${day(x.date)}</span>
+          <div class="muted tiny">${Object.entries(x.sexes).map(([k, n]) => `${n} ${escapeHtml(k)}`).join(", ")}</div></td>
+        <td><select data-pg="${i}" aria-label="Mob for this group"><option value="">Choose…</option>
+          ${mobs.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}
+          <option value="gone">Off the books (gone)</option></select></td>
+        <td><button class="btn" data-pgo="${i}">Put</button></td></tr>`).join("")}</tbody></table>`;
+    groupsEl.querySelectorAll("[data-pgo]").forEach((b) => {
+      b.onclick = async () => {
+        const i = Number(b.dataset.pgo);
+        const v = groupsEl.querySelector(`[data-pg="${i}"]`).value;
+        if (!v) { ctx.toast("Choose a mob first", { error: true }); return; }
+        b.disabled = true;
+        try {
+          const r = await send("POST", "/api/animals/unplaced/place", { session_id: g[i].session_id, mob_id: v === "gone" ? "gone" : Number(v) });
+          undoable(ctx, r.summary, r.batch);
+          loadGroups();
+          load();
+        } catch (e) {
+          b.disabled = false;
+          ctx.toast(e.message, { error: true });
+        }
+      };
+    });
+  };
   let seq = 0;
   const load = async () => {
     const mine = ++seq;
@@ -381,11 +418,12 @@ export async function renderAnimalsTab(ctx, el) {
     clearTimeout(timer);
     timer = setTimeout(load, 250);
   });
-  el.querySelector("#anStatus").onchange = (e) => { f.status = e.target.value; load(); };
+  el.querySelector("#anStatus").onchange = (e) => { f.status = e.target.value; load(); loadGroups(); };
   el.querySelector("#anMob").onchange = (e) => { f.mob = e.target.value; load(); };
   const imp = el.querySelector("[data-import]");
   if (imp) imp.onclick = () => ctx.startImport("session");
   load();
+  loadGroups();
 }
 
 /* -------------------------------- search ----------------------------------- */
