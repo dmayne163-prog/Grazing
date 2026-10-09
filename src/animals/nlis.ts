@@ -45,6 +45,7 @@ const PLACES: Record<string, string> = {
   QBBH0059: "The Pocket (Jim Bishop, Rolleston)",
   QJMK0252: "Julia Creek",
   QJJI0136: "Terrick Terrick, Blackall",
+  EUSY4720: "Emerald saleyards",
 };
 export const picName = (pic: string | null) => (pic ? PROCESSORS[pic] ?? PLACES[pic] ?? null : null);
 
