@@ -11,6 +11,7 @@ import {
   type MobCandidate, type MovementRow, type PaddockRowCandidate, type RainRow,
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
+import { paddockOnDate } from "../animals/location.js";
 import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
 import { addFromNlis, commitNlis, isNlisReport, nlisCheck, nlisUnknownArrivals, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
@@ -387,6 +388,12 @@ stockApi.get("/mobs/:id/events", (req, res) => {
 stockApi.get("/grazing", (_req, res) => {
   const out = [...paddockHistories().values()].map(({ periods, rests, ...summary }) => summary);
   res.json({ records_begin: recordsBegin(), paddocks: out });
+});
+
+/** The mobs and the animals in a paddock on a day. */
+stockApi.get("/paddocks/:id/animals", (req, res) => {
+  const date = typeof req.query["date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query["date"]) ? req.query["date"] : today();
+  res.json(paddockOnDate(Number(req.params["id"]), date));
 });
 
 stockApi.get("/paddocks/:id/grazing", (req, res) => {

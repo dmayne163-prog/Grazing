@@ -898,7 +898,10 @@ function featureHtml(f) {
     <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${p.kind === "paddock" ? stockHtml(f) : ""}
     ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture · Cibo PastureKey</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
-    ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
+    ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>
+      <h3>Who was here</h3>
+      <div class="row2"><div class="f"><label for="whoDate">On</label><input type="date" id="whoDate" value="${todayIso()}"></div><div></div></div>
+      <div id="whoHere"><p class="muted small">Loading…</p></div>` : ""}
     ${readOnly}
     ${canEdit() ? `
       <h3>Details</h3>
@@ -920,7 +923,7 @@ function bindFeature(f) {
     tr.onclick = () => selectMob(Number(tr.dataset.mob));
   });
   $("#back").onclick = () => select(null);
-  if (f.properties.kind === "paddock") loadGrazing(f);
+  if (f.properties.kind === "paddock") { loadGrazing(f); loadWhoHere(f); }
   const pp = $("#paddockPasture");
   if (pp) renderPaddockPasture(pp, f.id, grazable(f) || f.properties.area_ha || 0, () => state.selectedId === f.id);
   if (isGate(f)) loadGatePanel(ctx, f, body);
@@ -1331,4 +1334,39 @@ async function loadGrazing(f) {
       else toast("That mob has since been sold or merged; its record is kept but is not in the current list.");
     };
   });
+}
+
+/* ------------------------------ who was here ------------------------------- */
+
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** The mobs and the named animals in a paddock on the chosen day. */
+async function loadWhoHere(f) {
+  const input = $("#whoDate");
+  const el = $("#whoHere");
+  if (!input || !el) return;
+  const run = async () => {
+    let r;
+    try {
+      r = await get(`/api/paddocks/${f.id}/animals?date=${encodeURIComponent(input.value)}`);
+    } catch {
+      el.innerHTML = '<p class="muted small">Not available offline.</p>';
+      return;
+    }
+    if (state.selectedId !== f.id) return;
+    el.innerHTML = r.mobs.length ? `
+      <p class="small">${nf0.format(r.head)} head in ${r.mobs.length} mob${r.mobs.length === 1 ? "" : "s"}; ${nf0.format(r.named)} of them known by tag.</p>
+      ${r.mobs.map((m) => `<details><summary><button class="linkbtn" data-mob="${m.mob_id}">${escapeHtml(m.mob)}</button> · ${m.head} hd${m.owner ? ` <span class="chip owner">${escapeHtml(m.owner)}</span>` : ""}${m.inferred ? ' <span class="chip inferred">inferred gate</span>' : ""}
+          <span class="muted tiny">${m.animals.length} known by tag${m.with ? ` · with ${m.with} other paddock${m.with === 1 ? "" : "s"} open` : ""}</span></summary>
+        ${m.animals.length ? `<p class="small">${m.animals.slice(0, 400).map((a) => `<button class="linkbtn" data-animal="${a.id}">${escapeHtml(a.tag || (a.eid ? a.eid.replace(/^(\d{3})(\d+)$/, "$1 $2") : "#" + a.id))}</button>`).join(", ")}${m.animals.length > 400 ? " …" : ""}</p>` : '<p class="muted small">None of this mob known by tag.</p>'}
+      </details>`).join("")}`
+      : '<p class="muted small">No stock recorded here that day.</p>';
+    el.querySelectorAll("[data-mob]").forEach((b) => { b.onclick = (e) => { e.preventDefault(); const id = Number(b.dataset.mob); if (mobById(id)) selectMob(id); }; });
+    el.querySelectorAll("[data-animal]").forEach((b) => { b.onclick = () => selectAnimal(Number(b.dataset.animal)); });
+  };
+  input.onchange = run;
+  run();
 }

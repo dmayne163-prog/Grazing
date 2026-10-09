@@ -12,6 +12,7 @@ import { getFeature } from "../map/store.js";
 import { StockError, type When } from "../stock/actions.js";
 import { addEvent, allSegments, mobViews, type EventInput } from "../stock/store.js";
 import type { ParsedSession, SessionRow } from "./session.js";
+import { picName } from "./nlis.js";
 
 export interface AnimalRow {
   id: number;
@@ -249,7 +250,8 @@ export function animalView(id: number) {
     }
   }
   const segs = allSegments();
-  const paddocks: Array<{ from: string; to: string | null; mob_id: number; mob_name: string | null; paddocks: string[] }> = [];
+  type Stay = { from: string; to: string | null; mob_id: number | null; mob_name: string | null; paddocks: string[]; inferred: boolean; seen: string[]; known: boolean };
+  const paddocks: Stay[] = [];
   for (const s of spans) {
     for (const g of segs.filter((x) => x.mob_id === s.mob_id)) {
       const from = g.from > s.from ? g.from : s.from;
@@ -258,12 +260,46 @@ export function animalView(id: number) {
       if (to !== null && to <= from) continue;
       const names = g.paddock_ids.map((p) => getFeature(p)?.name ?? `#${p}`);
       const last = paddocks[paddocks.length - 1];
-      if (last && last.mob_id === s.mob_id && last.to === from && last.paddocks.join() === names.join()) {
+      if (last && last.mob_id === s.mob_id && last.to === from && last.paddocks.join() === names.join() && last.inferred === g.inferred) {
         last.to = to;
       } else {
-        paddocks.push({ from, to, mob_id: s.mob_id, mob_name: mobName(s.mob_id), paddocks: names });
+        paddocks.push({ from, to, mob_id: s.mob_id, mob_name: mobName(s.mob_id), paddocks: names, inferred: g.inferred, seen: [], known: true });
       }
     }
+  }
+  paddocks.sort((x, y) => x.from.localeCompare(y.from));
+
+  // On the property from arrival to leaving: NLIS's dates where it has them,
+  // else the first and last records here. Any part of that with no paddock
+  // (before mob records began, or a mob with no moves recorded) is listed
+  // as on the property, paddock not recorded.
+  const nlis = a.eid ? db.prepare("SELECT direction, pic, date FROM nlis_movements WHERE eid = ? ORDER BY date").all(a.eid) as Array<{ direction: string; pic: string | null; date: string }> : [];
+  const arrived = nlis.find((n) => n.direction === "on")?.date ?? ev[0]?.date ?? null;
+  const ending = ev.find((e) => ENDS.includes(e.kind));
+  const left = ending?.date ?? nlis.find((n) => n.direction === "off")?.date ?? null;
+  if (arrived) {
+    const filled: Stay[] = [];
+    let cursor = arrived;
+    for (const p of paddocks) {
+      if (p.from > cursor) filled.push({ from: cursor, to: p.from, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false });
+      filled.push(p);
+      if (p.to === null) { cursor = "9999"; break; }
+      if (p.to > cursor) cursor = p.to;
+    }
+    if (cursor !== "9999" && (!left || cursor < left)) {
+      filled.push({ from: cursor, to: left, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false });
+    }
+    paddocks.splice(0, paddocks.length, ...filled.filter((p) => !(p.to !== null && p.to <= p.from)));
+  }
+  // The days it was handled here (weighed, processed) fall in a stay as proof it was there.
+  // TSi's "Weal Paddock" trait says which paddock, where it was recorded.
+  for (const e of ev) {
+    if (!["weigh", "treatment", "score"].includes(e.kind) || e.source === "optiweigh") continue;
+    const p = paddocks.find((x) => x.from <= e.date && (x.to === null || e.date < x.to));
+    if (!p) continue;
+    const said = e.text?.match(/Paddock ([^·]+)/)?.[1]?.trim();
+    const tag = said ? `${e.date} (paddock ${said})` : e.date;
+    if (!p.seen.includes(tag) && !p.seen.some((x) => x.startsWith(e.date))) p.seen.push(tag);
   }
 
   return {
@@ -271,6 +307,8 @@ export function animalView(id: number) {
     status: st.status, status_date: st.date,
     mob_id: mob, mob_name: mobName(mob),
     weights, paddocks: paddocks.reverse(),
+    arrived, left,
+    nlis: nlis.map((n) => ({ ...n, name: picName(n.pic) })),
     events: [...ev].reverse().map((e) => ({
       id: e.id, date: e.date, time: e.time, kind: e.kind, mob_id: e.mob_id, mob_name: mobName(e.mob_id),
       weight_kg: e.weight_kg, score: e.score, text: e.text, source: e.source, batch: e.batch,

@@ -100,10 +100,18 @@ export async function renderAnimal(ctx, id, root) {
         <td class="num">${escapeHtml(gain(w.gain_per_day))}</td><td class="muted small">${escapeHtml(w.session || (w.source === "app" ? "entered" : ""))}</td></tr>`).join("")}
     </tbody></table>` : '<p class="muted small">No weights yet.</p>'}
 
-    <h3>Paddocks</h3>
+    <h3>Where it's been</h3>
+    ${v.arrived ? `<p class="small">${(() => {
+      const on = v.nlis.find((n) => n.direction === "on");
+      const off = v.nlis.find((n) => n.direction === "off");
+      return `Here from <b>${day(v.arrived)}</b>${on ? ` (from ${escapeHtml(on.name || on.pic || "")}, NLIS)` : ""}${v.left ? ` to <b>${day(v.left)}</b>${off ? ` (to ${escapeHtml(off.name || off.pic || "")}, NLIS)` : ""}` : ""}.`;
+    })()}</p>` : ""}
     ${v.paddocks.length ? `<ul class="history">${v.paddocks.map((p) => `
-      <li><span class="when">${span(p.from, p.to)}</span><span class="grow">${escapeHtml(p.paddocks.join(" + "))}<br><span class="muted tiny">with ${escapeHtml(p.mob_name || "")}</span></span></li>`).join("")}</ul>`
-    : '<p class="muted small">Not placed in a mob yet, so no paddock history.</p>'}
+      <li><span class="when">${span(p.from, p.to)}</span><span class="grow">${p.known
+        ? `${escapeHtml(p.paddocks.join(" + "))}${p.inferred ? ' <span class="chip inferred" title="Through a gate inferred to have been open">inferred gate</span>' : ""}<br><span class="muted tiny">with ${escapeHtml(p.mob_name || "")}${p.seen.length ? ` · <b>handled here</b> ${p.seen.slice(0, 4).map((d) => escapeHtml(d)).join(", ")}${p.seen.length > 4 ? " …" : ""}` : " · going by its mob's moves"}</span>`
+        : `<span class="muted">On the property, paddock not recorded</span>${p.seen.length ? `<br><span class="muted tiny">handled ${p.seen.slice(0, 4).map((d) => escapeHtml(d)).join(", ")}${p.seen.length > 4 ? " …" : ""}</span>` : ""}`}</span></li>`).join("")}</ul>
+      <p class="muted tiny">A paddock comes from the mob it was in and that mob's moves. "Handled here" means it was weighed or processed during that stay; otherwise it's going by its mob. The app's paddock records start when AgriWebb's movement history did.</p>`
+    : '<p class="muted small">No paddock history: not placed in a mob yet.</p>'}
 
     <h3>History</h3>
     <ul class="history">${(() => { const seen = new Set(); return v.events.map((e) => {
