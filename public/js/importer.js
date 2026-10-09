@@ -27,7 +27,7 @@ const fmtArea = (c) =>
 const PICKERS = {
   any: {
     title: "Import",
-    accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv,.db",
+    accept: ".json,.geojson,.kml,.kmz,.zip,.xlsx,.csv,.db,.txt",
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
       Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv), or Optiweigh's raw individual data (.csv), or a whole TSi / APS backup (WeighScaleCE.db).<br>
@@ -56,6 +56,13 @@ const PICKERS = {
     title: "Import AgriWebb records",
     accept: ".xlsx",
     help: "An export from AgriWebb (.xlsx): the mob list, the paddock list, the Movement records report or the rainfall report.",
+  },
+  nlis: {
+    title: "Import an NLIS report",
+    accept: ".txt,.csv",
+    help: `A tag-by-tag report from the NLIS database for the property's PIC, as it downloads (…QUERY-Results.txt):
+      <b>Cattle that have moved off PIC</b>, or <b>Active cattle moved onto my property</b>.<br>
+      Each tag is matched to its animal by EID. Animals the app still has as alive that NLIS shows leaving are recorded as having left on NLIS's date. Every row is kept, for the NLIS check. Importing a newer report later only adds what's new.`,
   },
   killsheet: {
     title: "Import a kill sheet",
@@ -124,7 +131,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
         return;
       }
-      if (/\.(xlsx|csv|db)$/i.test(file.name)) {
+      if (/\.(xlsx|csv|db|txt)$/i.test(file.name)) {
         const preview = await upload("/api/import/records/preview", file);
         if (preview.type === "mobs") showMobReview(file.name, preview);
         else if (preview.type === "movements") showMovementReview(file.name, preview);
@@ -133,6 +140,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         else if (preview.type === "optiweigh") showOptiweighReview(file.name, preview);
         else if (preview.type === "tsi") showTsiReview(file.name, preview);
         else if (preview.type === "killsheet") showKillSheetReview(file.name, preview);
+        else if (preview.type === "nlis") showNlisReview(file.name, preview);
         else showPaddockCheck(file.name, preview);
         return;
       }
@@ -700,6 +708,52 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
       const sel = dialog.querySelector("#owMob");
       try {
         const res = await send("POST", `/api/import/records/${p.importId}/commit`, { mob_id: sel && sel.value ? Number(sel.value) : null });
+        dialog.close();
+        onDone(`Imported ${res.summary}`, res.batch);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  /* ------------------------------ step 2: NLIS ------------------------------ */
+
+  function showNlisReview(filename, p) {
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    const n = (x) => Number(x).toLocaleString("en-AU");
+    const off = p.direction === "off";
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review NLIS report</h2>
+          <div class="muted small">${escapeHtml(filename)} · cattle moved ${off ? "off" : "onto"} the PIC · ${n(p.rows)} tags, ${fmt(p.from)} to ${fmt(p.to)}</div>
+        </header>
+        <div class="body">
+          <p>${n(p.matched)} matched to animals here by EID${p.unmatched ? `; ${n(p.unmatched)} aren't in the app (kept for the NLIS check)` : ""}${p.already ? `; ${n(p.already)} already imported, skipped` : ""}.</p>
+          ${off ? `
+            <p><b>${n(p.leaving)}</b> animals the app still has as alive will be recorded as having left, on NLIS's date:
+              ${n(p.leaving_by.sale)} sold to slaughter, ${n(p.leaving_by.gone)} moved off to another PIC, ${n(p.leaving_by.death)} dead.
+              ${n(p.already_ended)} already have an ending here and keep it.</p>
+            ${p.seen_after ? `<p class="small">${n(p.seen_after)} were weighed or processed here after NLIS has them leaving, so they're left as they are (they came back, or the NLIS record is wrong). They're on the NLIS check.</p>` : ""}
+            ${p.leaving_from_mobs.length ? `<div class="note">Leaving from mobs here (records only, head counts don't change): ${p.leaving_from_mobs.slice(0, 8).map((m) => `${escapeHtml(m.name)} ${m.head}`).join(", ")}. If a mob's head count is now too high, recount it.</div>` : ""}
+            <details class="gap-top"><summary class="small">Destinations</summary>
+              <table class="list"><tbody>${p.destinations.map((d) => `<tr><td>${escapeHtml(d.pic)}${d.name ? ` <span class="muted">${escapeHtml(d.name)}</span>` : ""}</td><td class="num">${n(d.head)}</td></tr>`).join("")}</tbody></table>
+            </details>` : `<p>Arrival dates and the PIC each came from are kept with each animal.</p>`}
+          <p class="muted small gap-top">One Undo reverses all of it.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      try {
+        const res = await send("POST", `/api/import/records/${p.importId}/commit`, {});
         dialog.close();
         onDone(`Imported ${res.summary}`, res.batch);
       } catch (e) {

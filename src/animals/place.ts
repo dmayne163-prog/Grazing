@@ -61,10 +61,11 @@ export function unplacedGroups(): UnplacedGroup[] {
  * Puts a group into a mob from the day it was last seen (or the mob's first
  * day, if later), or records it as gone. One batch, so one Undo reverses it.
  */
-export function placeGroup(sessionId: number | null, target: number | "gone", username: string | null) {
+export function placeGroup(sessionId: number | null, target: number | "gone", username: string | null, sex: string | null = null) {
   const animals = unplacedAnimals();
   const last = lastSessions(animals.map((a) => a.id));
-  const chosen = animals.filter((a) => last.get(a.id)!.session_id === sessionId);
+  // Optionally only one sex of the lot: the odd heifer among weaner steers goes elsewhere.
+  const chosen = animals.filter((a) => last.get(a.id)!.session_id === sessionId && (sex === null || (a.sex ?? "not recorded") === sex));
   if (!chosen.length) throw new StockError("No animals left in that group");
   const sess = sessionId !== null ? db.prepare("SELECT name, date FROM weigh_sessions WHERE id = ?").get(sessionId) as { name: string; date: string } | undefined : undefined;
   const label = sess ? `"${sess.name || "unnamed"}" ${sess.date}` : "no session";

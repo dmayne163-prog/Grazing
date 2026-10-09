@@ -313,6 +313,23 @@ CREATE TABLE IF NOT EXISTS kill_sheet_rows (
 CREATE INDEX IF NOT EXISTS idx_kill_rows_sheet ON kill_sheet_rows(sheet_id);
 CREATE INDEX IF NOT EXISTS idx_kill_rows_animal ON kill_sheet_rows(animal_id);
 
+-- NLIS movement reports for the PIC, tag by tag: moved off (to a PIC) and
+-- moved on (from one). Kept whether or not the app knows the animal.
+CREATE TABLE IF NOT EXISTS nlis_movements (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  direction  TEXT    NOT NULL,   -- 'off' or 'on'
+  eid        TEXT,
+  nlis_id    TEXT,
+  pic        TEXT,               -- destination (off) or source (on)
+  nvd        TEXT,
+  date       TEXT    NOT NULL,
+  animal_id  INTEGER,
+  filename   TEXT,
+  batch      TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nlis_eid ON nlis_movements(eid);
+
 -- Records undone in the app that had changed a head count, kept whole (as
 -- JSON) from the moment of undoing, so the head count register still shows
 -- them. Undo deletes from mob_events; this is the audit trail of that.

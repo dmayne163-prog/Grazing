@@ -361,7 +361,8 @@ export async function renderAnimalsTab(ctx, el) {
       <table class="list"><tbody>${g.map((x, i) => `<tr>
         <td><b>${x.head}</b> hd · ${escapeHtml(x.name)} <span class="muted">${day(x.date)}</span>
           <div class="muted tiny">${Object.entries(x.sexes).map(([k, n]) => `${n} ${escapeHtml(k)}`).join(", ")}</div></td>
-        <td><select data-pg="${i}" aria-label="Mob for this group"><option value="">Choose…</option>
+        <td>${Object.keys(x.sexes).length > 1 ? `<select data-pgs="${i}" aria-label="Which of them"><option value="">All ${x.head}</option>${Object.entries(x.sexes).map(([k, n]) => `<option value="${escapeHtml(k)}">Only the ${n} ${escapeHtml(k)}</option>`).join("")}</select>` : ""}
+          <select data-pg="${i}" aria-label="Mob for this group"><option value="">Choose…</option>
           ${mobs.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}
           <option value="gone">Off the books (gone)</option></select></td>
         <td><button class="btn" data-pgo="${i}">Put</button></td></tr>`).join("")}</tbody></table>`;
@@ -372,7 +373,8 @@ export async function renderAnimalsTab(ctx, el) {
         if (!v) { ctx.toast("Choose a mob first", { error: true }); return; }
         b.disabled = true;
         try {
-          const r = await send("POST", "/api/animals/unplaced/place", { session_id: g[i].session_id, mob_id: v === "gone" ? "gone" : Number(v) });
+          const sx = groupsEl.querySelector(`[data-pgs="${i}"]`);
+          const r = await send("POST", "/api/animals/unplaced/place", { session_id: g[i].session_id, mob_id: v === "gone" ? "gone" : Number(v), sex: sx && sx.value ? sx.value : null });
           undoable(ctx, r.summary, r.batch);
           loadGroups();
           load();

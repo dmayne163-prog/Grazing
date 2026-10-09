@@ -47,12 +47,12 @@ animalApi.get("/animals/unplaced", (_req, res) => {
 
 /** Puts one of those groups into a mob, or records it as off the books. */
 animalApi.post("/animals/unplaced/place", requireAdmin, (req, res) => {
-  const b = (req.body ?? {}) as { session_id?: unknown; mob_id?: unknown };
+  const b = (req.body ?? {}) as { session_id?: unknown; mob_id?: unknown; sex?: unknown };
   const sid = b.session_id === null || b.session_id === undefined ? null : Number(b.session_id);
   const target = b.mob_id === "gone" ? "gone" as const : Number(b.mob_id);
   act(req, res, `placed animals last seen in session #${sid ?? "none"} (${String(b.mob_id)})`, () => {
     if (target !== "gone" && !Number.isInteger(target)) throw new StockError("Choose a mob");
-    return placeGroup(sid, target, who(req));
+    return placeGroup(sid, target, who(req), typeof b.sex === "string" && b.sex ? b.sex : null);
   });
 });
 

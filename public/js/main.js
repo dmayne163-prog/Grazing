@@ -9,6 +9,7 @@ import { openGateFinder } from "./gatefinder.js";
 import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
 import { openRegister } from "./register.js";
+import { openNlisCheck } from "./nlischeck.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -574,6 +575,7 @@ function toolsHtml() {
       <p class="muted small">Everything is shown for you to check before anything is added.</p>
       <div class="importlist">
         <button class="btn" data-import="session"><b>Import a cattle session…</b><span>From the scales: Gallagher TSi, TWR-5 or APS (.csv)</span></button>
+        <button class="btn" data-import="nlis"><b>Import an NLIS report…</b><span>Cattle moved off or onto the PIC, tag by tag, from the NLIS database (.txt)</span></button>
         <button class="btn" data-import="killsheet"><b>Import a kill sheet…</b><span>The processor's assessment sheet and invoice, e.g. Hewitt (.xlsx or .csv)</span></button>
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
@@ -582,6 +584,10 @@ function toolsHtml() {
         <button class="btn" id="findGates"><b>Find gates that were probably left open…</b><span>From the pasture readings, for the time before this app (AgriWebb kept no gate records)</span></button>
       </div>
     ` : ""}
+
+    <h3>NLIS check</h3>
+    <p class="muted small">Where the NLIS record for the PIC and the app disagree: tags NLIS still holds here that the app has as gone, tags it holds that the app doesn't know, and animals on hand that NLIS says left.</p>
+    <div class="btns"><button class="btn" id="openNlis">NLIS check…</button></div>
 
     <h3>Ruminati</h3>
     <p class="muted small">The figures Ruminati's emissions report asks for, worked out from the mob records.</p>
@@ -670,6 +676,8 @@ function bindOverview() {
   loadOptiweigh(ctx, $("#owBox", body));
   const reg = $("#openRegister", body);
   if (reg) reg.onclick = () => openRegister(ctx);
+  const nl = $("#openNlis", body);
+  if (nl) nl.onclick = () => openNlisCheck(ctx);
   const ru = $("#openRuminati", body);
   if (ru) ru.onclick = () => openRuminati(ctx);
   const fg = $("#findGates", body);

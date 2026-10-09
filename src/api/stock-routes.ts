@@ -12,6 +12,7 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
 import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
+import { commitNlis, isNlisReport, nlisCheck, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
   deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
@@ -438,6 +439,14 @@ stockApi.post(
         res.json({ importId: id, type: "tsi", allMobs, ...plan });
         return;
       }
+      // An NLIS database report for the PIC: cattle moved off, or moved on, tag by tag.
+      if (/\.(csv|txt)$/i.test(filename) && isNlisReport(req.body.toString("utf8", 0, 500))) {
+        const rows = parseNlis(req.body.toString("utf8"));
+        const plan = planNlis(rows);
+        const id = storePreview(req, filename, "nlis", { rows, filename });
+        res.json({ importId: id, type: "nlis", ...plan });
+        return;
+      }
       // A processor's kill sheet (Hewitt's assessment sheet and invoice): carcases by ear tag.
       if (/.(xlsx|csv)$/i.test(filename) && await isKillSheet(filename, req.body)) {
         const sheet = await parseKillSheet(filename, req.body);
@@ -607,7 +616,7 @@ function storePreview(req: Request, filename: string, format: string, payload: u
 stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const row = db.prepare("SELECT * FROM imports WHERE id = ?").get(id) as ImportRow | undefined;
-  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || ["gallagher-session", "optiweigh", "tsi-backup", "killsheet"].includes(row.format))) {
+  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || ["gallagher-session", "optiweigh", "tsi-backup", "killsheet", "nlis"].includes(row.format))) {
     res.status(404).json({ error: "That import has expired or was already used. Upload the file again." });
     return;
   }
@@ -627,6 +636,8 @@ stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
                 ? commitTsiImport(row, req.body, who(req))
                 : row.format === "killsheet"
                 ? commitKillSheetImport(row, req.body, who(req))
+                : row.format === "nlis"
+                ? (() => { const { rows, filename } = JSON.parse(row.payload) as { rows: NlisRow[]; filename: string }; return commitNlis(rows, filename, who(req)); })()
                 : commitPaddocks(row, who(req));
     db.prepare("UPDATE imports SET status = 'committed', committed_at = ? WHERE id = ?").run(Date.now(), id);
     addEvent({
@@ -851,3 +862,8 @@ function commitKillSheetImport(row: ImportRow, body: unknown, username: string |
     throw e;
   }
 }
+
+/** Where NLIS and the app disagree: the clean-up list. */
+stockApi.get("/nlis/check", (_req, res) => {
+  res.json(nlisCheck());
+});
