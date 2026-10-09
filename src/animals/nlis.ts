@@ -33,7 +33,20 @@ export interface NlisRow {
 const PROCESSORS: Record<string, string> = {
   QABB1620: "ACC Cannon Hill",
   QFWG1650: "Nolans Gympie",
+  // Matched by kill date against the NLIS audit report's processor numbers.
+  QKMC0170: "Mackay abattoir (#67)",
+  QBGT7103: "Grantham abattoir (#203)",
+  QKBM0095: "Teys Biloela (#399)",
+  QDLI1244: "JBS Rockhampton (#384)",
 };
+/** Other PICs cattle came from or went to, by name. */
+const PLACES: Record<string, string> = {
+  QIBH0131: "Penjobe",
+  QBBH0059: "The Pocket (Jim Bishop, Rolleston)",
+  QJMK0252: "Julia Creek",
+  QJJI0136: "Terrick Terrick, Blackall",
+};
+export const picName = (pic: string | null) => (pic ? PROCESSORS[pic] ?? PLACES[pic] ?? null : null);
 
 const key = (s: string) => s.toLowerCase().replace(/_x0020_/g, "").replace(/_x002f_/g, "").replace(/[^a-z]/g, "");
 
@@ -128,7 +141,7 @@ export function planNlis(rows: NlisRow[]) {
     leaving_from_mobs: Object.entries(mobs).map(([name, head]) => ({ name, head })).sort((a, b) => b.head - a.head),
     already_ended: off.filter((x) => x.a && x.a.status !== "alive").length,
     seen_after: back.length,
-    destinations: Object.entries(pics).map(([pic, head]) => ({ pic, head, name: PROCESSORS[pic] ?? (pic === "DECEASED" ? "Recorded dead" : null) })).sort((a, b) => b.head - a.head),
+    destinations: Object.entries(pics).map(([pic, head]) => ({ pic, head, name: picName(pic) ?? (pic === "DECEASED" ? "Recorded dead" : null) })).sort((a, b) => b.head - a.head),
     from: rows.reduce((d, r) => (r.date < d ? r.date : d), rows[0]!.date),
     to: rows.reduce((d, r) => (r.date > d ? r.date : d), rows[0]!.date),
   };
@@ -150,7 +163,7 @@ export function commitNlis(rows: NlisRow[], filename: string, username: string |
       kept++;
       if (r.direction !== "off" || !a || a.status !== "alive" || seenAfter(a.id, r.date)) continue;
       const how = howLeft(r.pic);
-      const where = r.pic === "DECEASED" ? null : PROCESSORS[r.pic ?? ""] ?? r.pic;
+      const where = r.pic === "DECEASED" ? null : picName(r.pic) ?? r.pic;
       addAnimalEvent(a.id, {
         date: r.date, kind: how, mob_id: a.mob_id,
         text: how === "death" ? "Recorded dead in NLIS" : `Moved off to ${where ?? "an unknown PIC"} (NLIS)`,
