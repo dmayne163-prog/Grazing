@@ -10,6 +10,7 @@ import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
 import { openRegister } from "./register.js";
 import { openNlisCheck } from "./nlischeck.js";
+import { openUsers } from "./users.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -619,6 +620,10 @@ function toolsHtml() {
       <div class="btns"><button class="btn" id="offlineBtn">Save map for offline</button></div>
     ` : ""}
 
+    <h3>Users and passwords</h3>
+    <p class="muted small">${canEdit() ? "Add people who can use the app (view only or administrator), reset passwords, and change your own." : "Change your password."}</p>
+    <div class="btns"><button class="btn" id="openUsers">${canEdit() ? "Users and passwords…" : "Change my password…"}</button></div>
+
     ${canEdit() ? `
       <h3>Backups</h3>
       <p class="muted small">The database copies itself every night on the server. Download a copy now and then to keep somewhere else as well.</p>
@@ -676,6 +681,8 @@ function bindOverview() {
   loadOptiweigh(ctx, $("#owBox", body));
   const reg = $("#openRegister", body);
   if (reg) reg.onclick = () => openRegister(ctx);
+  const us = $("#openUsers", body);
+  if (us) us.onclick = () => openUsers(ctx);
   const nl = $("#openNlis", body);
   if (nl) nl.onclick = () => openNlisCheck(ctx);
   const ru = $("#openRuminati", body);
