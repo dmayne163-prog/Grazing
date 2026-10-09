@@ -49,7 +49,7 @@ export interface AnimalEventRow {
 
 const ORDER = "date, IFNULL(time, ''), id";
 
-function eventsOf(id: number): AnimalEventRow[] {
+export function eventsOf(id: number): AnimalEventRow[] {
   return db.prepare(`SELECT * FROM animal_events WHERE animal_id = ? ORDER BY ${ORDER}`).all(id) as AnimalEventRow[];
 }
 
@@ -59,13 +59,13 @@ function eventsOf(id: number): AnimalEventRow[] {
  * or trucked out and never marked.
  */
 const ENDS = ["death", "sale", "gone"];
-function statusOf(events: AnimalEventRow[]): { status: "alive" | "dead" | "sold" | "gone"; date: string | null } {
+export function statusOf(events: AnimalEventRow[]): { status: "alive" | "dead" | "sold" | "gone"; date: string | null } {
   const end = [...events].reverse().find((e) => ENDS.includes(e.kind));
   return end ? { status: end.kind === "death" ? "dead" : end.kind === "sale" ? "sold" : "gone", date: end.date } : { status: "alive", date: null };
 }
 
 /** The mob an animal is in at the end of its events, if any. */
-function currentMob(events: AnimalEventRow[]): number | null {
+export function currentMob(events: AnimalEventRow[]): number | null {
   let mob: number | null = null;
   for (const e of events) {
     if (e.kind === "join") mob = e.mob_id;
@@ -281,7 +281,7 @@ export function animalView(id: number) {
 
 /* ------------------------------ writing events --------------------------- */
 
-function addAnimalEvent(
+export function addAnimalEvent(
   animalId: number, e: { date: string; time?: string | null; kind: string; mob_id?: number | null; weight_kg?: number | null; score?: number | null; text?: string | null; session_id?: number | null; data?: Record<string, unknown> },
   source: string, username: string | null, batch: string
 ) {

@@ -35,7 +35,7 @@ export interface ParsedSession {
 }
 
 /** Splits CSV text into rows of fields, honouring quotes and quoted commas. */
-function parseCsv(text: string): string[][] {
+export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";

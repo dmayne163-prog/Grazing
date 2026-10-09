@@ -330,8 +330,10 @@ export function undoBatch(batch: string, username: string | null = null): { even
     const animalEvents = db.prepare("DELETE FROM animal_events WHERE batch = ?").run(batch).changes;
     const animals = db.prepare("DELETE FROM animals WHERE batch = ?").run(batch).changes;
     db.prepare("DELETE FROM session_fields WHERE batch = ?").run(batch);
+    db.prepare("DELETE FROM kill_sheet_rows WHERE batch = ?").run(batch);
+    const killSheets = db.prepare("DELETE FROM kill_sheets WHERE batch = ?").run(batch).changes;
     const sessions = db.prepare("DELETE FROM weigh_sessions WHERE batch = ?").run(batch).changes;
-    if (events + gates + mobs + animalEvents + animals + sessions === 0) {
+    if (events + gates + mobs + animalEvents + animals + sessions + killSheets === 0) {
       throw new StockError("Nothing to undo — it may already have been undone");
     }
     return { events: events + animalEvents, mobs, gates, animals, sessions };

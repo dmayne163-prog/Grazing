@@ -274,6 +274,45 @@ CREATE TABLE IF NOT EXISTS rain_readings (
 );
 CREATE INDEX IF NOT EXISTS idx_rain_date ON rain_readings(date);
 
+-- Kill sheets from the processor (Hewitt's assessment sheet and invoice), one
+-- row per carcase. Kept whole, matched to an animal or not: the carcase
+-- weights are what Ruminati's production figures and the audits rest on.
+CREATE TABLE IF NOT EXISTS kill_sheets (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice    TEXT,
+  date       TEXT    NOT NULL,     -- processing (kill) date
+  left_date  TEXT    NOT NULL,     -- the day they left the property
+  plant      TEXT,
+  pic        TEXT,
+  vendor     TEXT,
+  filename   TEXT,
+  head       INTEGER NOT NULL,
+  hscw_kg    REAL    NOT NULL,
+  value      REAL,
+  batch      TEXT,
+  username   TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kill_sheet_rows (
+  sheet_id     INTEGER NOT NULL,
+  body         TEXT,
+  animal_id    INTEGER,
+  eid          TEXT,
+  sex          TEXT,
+  teeth        INTEGER,
+  fat_mm       REAL,
+  hscw_kg      REAL    NOT NULL,
+  msa_index    REAL,
+  price_per_kg REAL,
+  value        REAL,
+  live_kg      REAL,               -- its last liveweight within 30 days before the kill
+  dressing_pct REAL,
+  grading      TEXT,               -- the sheet's other columns, by heading
+  batch        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_kill_rows_sheet ON kill_sheet_rows(sheet_id);
+CREATE INDEX IF NOT EXISTS idx_kill_rows_animal ON kill_sheet_rows(animal_id);
+
 -- Records undone in the app that had changed a head count, kept whole (as
 -- JSON) from the moment of undoing, so the head count register still shows
 -- them. Undo deletes from mob_events; this is the audit trail of that.

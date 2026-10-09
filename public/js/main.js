@@ -574,6 +574,7 @@ function toolsHtml() {
       <p class="muted small">Everything is shown for you to check before anything is added.</p>
       <div class="importlist">
         <button class="btn" data-import="session"><b>Import a cattle session…</b><span>From the scales: Gallagher TSi, TWR-5 or APS (.csv)</span></button>
+        <button class="btn" data-import="killsheet"><b>Import a kill sheet…</b><span>The processor's assessment sheet and invoice, e.g. Hewitt (.xlsx or .csv)</span></button>
         <button class="btn" data-import="map"><b>Import a map file…</b><span>Paddocks, water points and gates: AgriWebb, Google Earth, shapefile</span></button>
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
         <button class="btn" data-import="pasture"><b>Import a Cibo Labs pasture report…</b><span>PastureKey paddock readings, or the farm Pasture Biomass report (.zip)</span></button>

@@ -31,6 +31,7 @@ const PICKERS = {
     help: `Maps: AgriWebb map export (.json), Google Earth (.kml / .kmz), a zipped shapefile (.zip) or GeoJSON.<br>
       Records: AgriWebb exports (.xlsx).<br>
       Cattle: a session from the scales — Gallagher TSi, TWR-5 or APS (.csv), or Optiweigh's raw individual data (.csv), or a whole TSi / APS backup (WeighScaleCE.db).<br>
+      Kill sheets: the processor's assessment sheet and invoice (.xlsx or .csv).<br>
       Pasture: a Cibo Labs download (.zip): the farm's Pasture Biomass report, or PastureKey's paddock readings.`,
   },
   optiweigh: {
@@ -55,6 +56,12 @@ const PICKERS = {
     title: "Import AgriWebb records",
     accept: ".xlsx",
     help: "An export from AgriWebb (.xlsx): the mob list, the paddock list, the Movement records report or the rainfall report.",
+  },
+  killsheet: {
+    title: "Import a kill sheet",
+    accept: ".xlsx,.csv",
+    help: `The processor's assessment sheet and invoice as a spreadsheet (.xlsx or .csv), one row per carcase — Hewitt sends these with each consignment.<br>
+      Each carcase is matched to its animal by ear tag. You check the mobs and the date they left before anything is recorded. A PDF can't be read this way: ask for the spreadsheet.`,
   },
   session: {
     title: "Import a cattle session",
@@ -125,6 +132,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         else if (preview.type === "session") showSessionReview(file.name, preview);
         else if (preview.type === "optiweigh") showOptiweighReview(file.name, preview);
         else if (preview.type === "tsi") showTsiReview(file.name, preview);
+        else if (preview.type === "killsheet") showKillSheetReview(file.name, preview);
         else showPaddockCheck(file.name, preview);
         return;
       }
@@ -692,6 +700,59 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
       const sel = dialog.querySelector("#owMob");
       try {
         const res = await send("POST", `/api/import/records/${p.importId}/commit`, { mob_id: sel && sel.value ? Number(sel.value) : null });
+        dialog.close();
+        onDone(`Imported ${res.summary}`, res.batch);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  /* --------------------------- step 2: kill sheet --------------------------- */
+
+  function showKillSheetReview(filename, p) {
+    const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    const kg = (n) => `${Number(n).toLocaleString("en-AU", { maximumFractionDigits: 1 })} kg`;
+    const sexName = { F: "female", M: "male", S: "steer", "?": "not given" };
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review kill sheet</h2>
+          <div class="muted small">${escapeHtml(filename)}${p.invoice ? ` · invoice ${escapeHtml(p.invoice)}` : ""} · processed ${fmt(p.date)}${p.plant ? ` at ${escapeHtml(p.plant)}` : ""}</div>
+        </header>
+        <div class="body">
+          ${p.duplicate ? `<div class="note err">${escapeHtml(p.duplicate)}. It can't be imported twice.</div>` : ""}
+          <p><b>${p.head}</b> carcases, <b>${kg(p.hscw_kg)}</b> HSCW${p.value ? `, ${p.value.toLocaleString("en-AU", { minimumFractionDigits: 2 })}` : ""}.
+            ${p.by_sex.map((x) => `${x.head} ${sexName[x.sex] || escapeHtml(x.sex)} (${kg(x.hscw_kg)})`).join(", ")}.</p>
+          <p>${p.matched} matched to animals here by ear tag${p.already_sold ? ` (${p.already_sold} already recorded as sold or gone; their carcases are added to their records)` : ""}.
+            ${p.unmatched ? `<b>${p.unmatched}</b> not matched${p.unmatched_eids.length ? `: <span class="muted tiny">${p.unmatched_eids.map(escapeHtml).join(", ")}${p.unmatched > p.unmatched_eids.length ? " …" : ""}</span>` : " (no ear tag)"}. They're kept on the kill sheet.` : ""}</p>
+          ${p.dressing ? `<p class="small">Dressing: <b>${p.dressing.average}%</b> on average across the ${p.dressing.animals} animals weighed alive in the month before (${p.dressing.min}–${p.dressing.max}%).</p>` : ""}
+          <div class="f"><label for="ksLeft">Left the property</label><input type="date" id="ksLeft" value="${p.date}" max="${p.date}"></div>
+          ${p.mobs.length ? `<h3>Take them off their mobs</h3>
+            ${p.mobs.map((m) => `<label class="radio"><input type="checkbox" data-ks-mob="${m.id}"${m.take_off ? " checked" : ""}> ${escapeHtml(m.name)}: −${m.head} hd
+              ${m.recorded.length ? `<span class="muted tiny"> · already has a sale ${m.recorded.map((r) => `${fmt(r.date)} (${r.head} hd)`).join(", ")}: leave unticked unless that's a different lot</span>` : ""}</label>`).join("")}` : ""}
+          ${p.unmatched ? `<div class="f gap-top"><label for="ksUnmatched">The ${p.unmatched} not matched came from</label>
+            <select id="ksUnmatched"><option value="">Leave the mob counts alone</option>${p.allMobs.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</select></div>` : ""}
+          <p class="muted small gap-top">Each matched animal still on hand is recorded as sold on the day it left, with its carcase weight, invoice and body number. Sales come off the ticked mobs and appear in the head count register. The whole sheet is kept for the Ruminati production figures. One Undo reverses all of it.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit"${p.duplicate ? " disabled" : ""}>Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      const un = dialog.querySelector("#ksUnmatched");
+      try {
+        const res = await send("POST", `/api/import/records/${p.importId}/commit`, {
+          left_date: dialog.querySelector("#ksLeft").value,
+          take_off: [...dialog.querySelectorAll("[data-ks-mob]")].filter((c) => c.checked).map((c) => Number(c.dataset.ksMob)),
+          unmatched_mob_id: un && un.value ? Number(un.value) : null,
+        });
         dialog.close();
         onDone(`Imported ${res.summary}`, res.batch);
       } catch (e) {

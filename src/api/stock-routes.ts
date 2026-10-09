@@ -11,6 +11,7 @@ import {
   type MobCandidate, type MovementRow, type PaddockRowCandidate, type RainRow,
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
+import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
   deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
@@ -437,6 +438,16 @@ stockApi.post(
         res.json({ importId: id, type: "tsi", allMobs, ...plan });
         return;
       }
+      // A processor's kill sheet (Hewitt's assessment sheet and invoice): carcases by ear tag.
+      if (/.(xlsx|csv)$/i.test(filename) && await isKillSheet(filename, req.body)) {
+        const sheet = await parseKillSheet(filename, req.body);
+        const plan = planKillSheet(sheet);
+        const id = storePreview(req, filename, "killsheet", { sheet, filename });
+        const allMobs = mobViews().map((v) => ({ id: v.mob.id, name: v.mob.name, head: v.state.head }))
+          .sort((x, y) => x.name.localeCompare(y.name));
+        res.json({ importId: id, type: "killsheet", allMobs, ...plan });
+        return;
+      }
       // Optiweigh's raw individual weights: daily weights by EID from the walk-over unit.
       if (/.csv$/i.test(filename) && isOptiweigh(req.body.toString("utf8", 0, 300))) {
         const rows = parseOptiweigh(req.body.toString("utf8"));
@@ -596,7 +607,7 @@ function storePreview(req: Request, filename: string, format: string, payload: u
 stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const row = db.prepare("SELECT * FROM imports WHERE id = ?").get(id) as ImportRow | undefined;
-  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || ["gallagher-session", "optiweigh", "tsi-backup"].includes(row.format))) {
+  if (!row || row.status !== "preview" || !(row.format.startsWith("agriwebb-") || ["gallagher-session", "optiweigh", "tsi-backup", "killsheet"].includes(row.format))) {
     res.status(404).json({ error: "That import has expired or was already used. Upload the file again." });
     return;
   }
@@ -614,6 +625,8 @@ stockApi.post("/import/records/:id/commit", requireAdmin, (req, res) => {
               ? commitOptiweighImport(row, req.body, who(req))
               : row.format === "tsi-backup"
                 ? commitTsiImport(row, req.body, who(req))
+                : row.format === "killsheet"
+                ? commitKillSheetImport(row, req.body, who(req))
                 : commitPaddocks(row, who(req));
     db.prepare("UPDATE imports SET status = 'committed', committed_at = ? WHERE id = ?").run(Date.now(), id);
     addEvent({
@@ -828,3 +841,13 @@ stockApi.post("/mob-events/:id/notes", requireAdmin, (req, res) => {
     return {};
   });
 });
+
+function commitKillSheetImport(row: ImportRow, body: unknown, username: string | null) {
+  const { sheet, filename } = JSON.parse(row.payload) as { sheet: KillSheet; filename: string };
+  try {
+    return commitKillSheet(sheet, filename, (body ?? {}) as Record<string, unknown>, username);
+  } catch (e) {
+    if (e instanceof StockError) throw new ImportError(e.message);
+    throw e;
+  }
+}
