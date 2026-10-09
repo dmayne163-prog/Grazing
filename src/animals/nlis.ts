@@ -206,3 +206,64 @@ export function nlisCheck() {
     .map((r) => { const a = animals.get(r.eid)!; return { eid: r.eid, tag: a.tag, mob: a.mob_name, to_pic: r.pic, date: r.date }; });
   return { reports: db.prepare("SELECT direction, COUNT(*) n, MIN(date) from_date, MAX(date) to_date FROM nlis_movements GROUP BY direction").all(), ended, unknown, no_mob: noMob, conflicts };
 }
+
+/** Tags NLIS has arriving here that the app has no animal for, by delivery (source PIC and date). */
+export function nlisUnknownArrivals() {
+  const known = new Set((db.prepare("SELECT eid FROM animals WHERE eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
+  const offEids = new Set((db.prepare("SELECT eid FROM nlis_movements WHERE direction = 'off' AND eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
+  const groups = new Map<string, { pic: string | null; name: string | null; date: string; head: number }>();
+  for (const r of db.prepare("SELECT eid, pic, date FROM nlis_movements WHERE direction = 'on' AND eid IS NOT NULL").all() as Array<{ eid: string; pic: string | null; date: string }>) {
+    if (known.has(r.eid) || offEids.has(r.eid)) continue;
+    const k = `${r.pic}|${r.date}`;
+    const g = groups.get(k) ?? { pic: r.pic, name: picName(r.pic), date: r.date, head: 0 };
+    g.head++;
+    groups.set(k, g);
+  }
+  return [...groups.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/**
+ * Creates an animal for each tag in one NLIS delivery that the app doesn't
+ * have, and puts them in a mob from the day they arrived (or the mob's first
+ * day). Records only: the mob's head count doesn't change, and it's refused if
+ * the mob would end up with more animals than head. One batch, undoable.
+ */
+export function addFromNlis(pic: string | null, date: string, mobId: number, sex: string | null, username: string | null) {
+  const mob = db.prepare("SELECT id, name, owner, birth_date, breed FROM mobs WHERE id = ?").get(mobId) as { id: number; name: string; owner: string | null; birth_date: string | null; breed: string | null } | undefined;
+  if (!mob) throw new StockError("No such mob");
+  if (sex !== null && !["female", "steer", "male", "stag"].includes(sex)) throw new StockError("Unknown sex");
+  const known = new Set((db.prepare("SELECT eid FROM animals WHERE eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
+  const offEids = new Set((db.prepare("SELECT eid FROM nlis_movements WHERE direction = 'off' AND eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
+  const rows = (db.prepare("SELECT id, eid, nlis_id, nvd FROM nlis_movements WHERE direction = 'on' AND IFNULL(pic, '') = IFNULL(?, '') AND date = ? AND eid IS NOT NULL").all(pic, date) as Array<{ id: number; eid: string; nlis_id: string | null; nvd: string | null }>)
+    .filter((r) => !known.has(r.eid) && !offEids.has(r.eid));
+  if (!rows.length) throw new StockError("No tags left to add from that delivery");
+  const head = (() => {
+    let h = 0, started = false;
+    for (const e of db.prepare("SELECT kind, head, head_change, id FROM mob_events WHERE mob_id = ? AND kind != 'void' ORDER BY date, CASE kind WHEN 'opening' THEN 0 ELSE 1 END, IFNULL(time, ''), id").all(mobId) as Array<{ kind: string; head: number | null; head_change: number | null; id: number }>) {
+      if (e.head !== null && (e.kind === "count" || (e.kind === "opening" && !started))) h = e.head;
+      if (e.kind === "opening") started = true;
+      if (e.head_change !== null) h += e.head_change;
+    }
+    return h;
+  })();
+  const have = allSummaries().filter((a) => a.status === "alive" && a.mob_id === mobId).length;
+  if (have + rows.length > head) {
+    throw new StockError(`${mob.name} has ${head} hd and ${have} animal records: ${rows.length} more would be more animals than head.`);
+  }
+  const first = (db.prepare("SELECT MIN(date) d FROM mob_events WHERE mob_id = ?").get(mobId) as { d: string | null }).d;
+  const joinDate = first && first > date ? first : date;
+  const origin = `${picName(pic) ?? "PIC"}${pic ? ` (${pic})` : ""}`;
+  const batch = randomUUID();
+  const now = Date.now();
+  db.transaction(() => {
+    const ins = db.prepare(`INSERT INTO animals (eid, nlis, sex, breed, birth_date, origin, data, source, batch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, '{}', 'nlis', ?, ?, ?)`);
+    const link = db.prepare("UPDATE nlis_movements SET animal_id = ? WHERE id = ?");
+    for (const r of rows) {
+      const id = Number(ins.run(r.eid, r.nlis_id, sex, mob.breed, mob.birth_date, origin, batch, now, now).lastInsertRowid);
+      link.run(id, r.id);
+      addAnimalEvent(id, { date: joinDate, kind: "join", mob_id: mobId, data: { from: `NLIS arrival from ${origin} ${date}`, nvd: r.nvd } }, "nlis", username, batch);
+    }
+  })();
+  return { batch, added: rows.length, summary: `${rows.length} animal records from the NLIS arrival from ${origin} on ${date}, in ${mob.name}` };
+}

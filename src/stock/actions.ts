@@ -328,6 +328,7 @@ export function undoBatch(batch: string, username: string | null = null): { even
     const gates = db.prepare("DELETE FROM gate_events WHERE batch = ?").run(batch).changes;
     const mobs = db.prepare("DELETE FROM mobs WHERE batch = ?").run(batch).changes;
     const animalEvents = db.prepare("DELETE FROM animal_events WHERE batch = ?").run(batch).changes;
+    db.prepare("UPDATE nlis_movements SET animal_id = NULL WHERE animal_id IN (SELECT id FROM animals WHERE batch = ?)").run(batch);
     const animals = db.prepare("DELETE FROM animals WHERE batch = ?").run(batch).changes;
     db.prepare("DELETE FROM session_fields WHERE batch = ?").run(batch);
     db.prepare("DELETE FROM kill_sheet_rows WHERE batch = ?").run(batch);

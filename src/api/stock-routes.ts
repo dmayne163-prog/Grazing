@@ -12,7 +12,7 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
 import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
-import { commitNlis, isNlisReport, nlisCheck, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
+import { addFromNlis, commitNlis, isNlisReport, nlisCheck, nlisUnknownArrivals, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
 import { addReading, ensureGauge, gaugeByName, readingExists } from "../rain/store.js";
 import {
   deleteAppEvent, draftMob, mergeMob, moveMobs, parseWhen, recordDeaths, recount, setGate, StockError, undoBatch, voidEvent, weighMob,
@@ -866,4 +866,19 @@ function commitKillSheetImport(row: ImportRow, body: unknown, username: string |
 /** Where NLIS and the app disagree: the clean-up list. */
 stockApi.get("/nlis/check", (_req, res) => {
   res.json(nlisCheck());
+});
+
+/** NLIS deliveries with tags the app has no animal for. */
+stockApi.get("/nlis/arrivals", (_req, res) => {
+  res.json({ groups: nlisUnknownArrivals() });
+});
+
+/** Creates the animals for one of those deliveries, in a mob. */
+stockApi.post("/nlis/arrivals/add", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as { pic?: unknown; date?: unknown; mob_id?: unknown; sex?: unknown };
+  act(res, () => {
+    const r = addFromNlis(typeof b.pic === "string" ? b.pic : null, String(b.date ?? ""), Number(b.mob_id), typeof b.sex === "string" && b.sex ? b.sex : null, who(req));
+    logAction(req, r.summary);
+    return r;
+  });
 });

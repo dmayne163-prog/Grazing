@@ -5,7 +5,8 @@
  * doesn't know, animals here that aren't in a mob, and animals on hand here
  * that NLIS says left. Each list exports to CSV.
  */
-import { get } from "./api.js";
+import { get, send } from "./api.js";
+import { undoable } from "./stockui.js";
 import { escapeHtml } from "./map.js";
 
 const day = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—");
@@ -31,9 +32,9 @@ export async function openNlisCheck(ctx) {
   const d = ctx.dialog;
   d.innerHTML = '<div class="dlg wide"><div class="body"><p>Checking…</p></div></div>';
   if (!d.open) d.showModal();
-  let r;
+  let r, arrivals;
   try {
-    r = await get("/api/nlis/check");
+    [r, arrivals] = await Promise.all([get("/api/nlis/check"), get("/api/nlis/arrivals").then((x) => x.groups)]);
   } catch (e) {
     d.querySelector(".body").innerHTML = `<div class="note err">${escapeHtml(e.message)}</div>`;
     return;
@@ -44,6 +45,13 @@ export async function openNlisCheck(ctx) {
     <div class="dlg wide report">
       <header><h2>NLIS check</h2><div class="muted small">${reports ? `From the NLIS reports imported: ${escapeHtml(reports)}.` : "No NLIS reports imported yet: Tools → Import an NLIS report."}</div></header>
       <div class="body">
+        ${ctx.canEdit && arrivals.length ? `<h3>Deliveries with tags not in the app</h3>
+          <p class="muted small">Create an animal record for each tag in a delivery and put them in their mob. Records only: head counts don't change.</p>
+          <table class="list"><tbody>${arrivals.map((a, i) => `<tr>
+            <td><b>${a.head}</b> tags · ${escapeHtml(a.name || a.pic || "?")} <span class="muted">${escapeHtml(a.pic || "")} · arrived ${day(a.date)}</span></td>
+            <td><select data-am="${i}" aria-label="Mob"><option value="">Mob…</option>${[...ctx.state.mobs].sort((x, y) => x.name.localeCompare(y.name)).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</select>
+              <select data-as="${i}" aria-label="Sex"><option value="">Sex not known</option><option value="female">Heifers / cows</option><option value="steer">Steers</option><option value="male">Bulls</option></select></td>
+            <td><button class="btn" data-ago="${i}">Add</button></td></tr>`).join("")}</tbody></table>` : ""}
         ${LISTS.map(([k, title, help, cols]) => `
           <h3>${escapeHtml(title)} · ${r[k].length.toLocaleString("en-AU")}</h3>
           <p class="muted small">${escapeHtml(help)}</p>
@@ -57,6 +65,23 @@ export async function openNlisCheck(ctx) {
       <footer class="btns"><button class="btn" id="nlClose">Close</button></footer>
     </div>`;
   d.querySelector("#nlClose").onclick = () => d.close();
+  d.querySelectorAll("[data-ago]").forEach((b) => {
+    b.onclick = async () => {
+      const i = Number(b.dataset.ago);
+      const mob = d.querySelector(`[data-am="${i}"]`).value;
+      const sex = d.querySelector(`[data-as="${i}"]`).value;
+      if (!mob) { ctx.toast("Choose the mob they're in", { error: true }); return; }
+      b.disabled = true;
+      try {
+        const res = await send("POST", "/api/nlis/arrivals/add", { pic: arrivals[i].pic, date: arrivals[i].date, mob_id: Number(mob), sex: sex || null });
+        undoable(ctx, res.summary, res.batch);
+        openNlisCheck(ctx);
+      } catch (e) {
+        b.disabled = false;
+        ctx.toast(e.message, { error: true });
+      }
+    };
+  });
   d.querySelectorAll("[data-csv]").forEach((b) => {
     b.onclick = () => {
       const [k, title, , cols] = LISTS.find(([x]) => x === b.dataset.csv);
