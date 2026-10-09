@@ -778,6 +778,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
           <div class="muted small">${escapeHtml(filename)} · ${n(p.animals)} animals · ${n(p.sessions)} sessions · up to ${fmt(p.backup_date)}</div>
         </header>
         <div class="body">
+          ${p.not_ours?.head ? `<div class="note">Left out: <b>${n(p.not_ours.head)} head of someone else's cattle</b>, marked Purchased = No in ${p.not_ours.sessions.map((x) => `"${escapeHtml(x.name)}" (${escapeHtml(x.date)}, ${x.head} hd)`).join(", ")}. They never enter the records.${p.not_ours.in_app.length ? ` ${p.not_ours.in_app.length} of them are already in the app by EID and are kept: check ${p.not_ours.in_app.slice(0, 5).map((x) => escapeHtml(x.tag || x.eid || "")).join(", ")}.` : ""}</div>` : ""}
           <p class="small">History only: <b>no mob's head count changes</b>. ${n(p.matched)} animals are already here (matched by EID) and keep their mob; ${n(p.new_animals)} are new.</p>
           <dl class="facts">
             <dt>Weights</dt><dd>${n(p.weights)}${p.weights_already ? ` <span class="muted">(${n(p.weights_already)} already here, skipped)</span>` : ""}</dd>

@@ -73,6 +73,21 @@ export interface TsiBackup {
   seen: Record<number, number[]>;
   /** Draft flags set in each animal's sessions: "tid:sid" → ["Sending to Arcadian", …]. */
   flags: Record<string, string[]>;
+  /** Cattle put through the yards for someone else, left out of everything above. */
+  not_ours: NotOurs;
+}
+
+/**
+ * Animals marked Purchased = No in a session (and never Yes): someone else's
+ * cattle processed through these yards, as the Penjobe owners' 89 head in
+ * "Purchse from penjobe" on 22 Apr 2026. They must never enter the records.
+ * One already in the app by EID is kept, since something else put it there,
+ * and listed so it can be checked.
+ */
+export interface NotOurs {
+  head: number;
+  sessions: Array<{ name: string; date: string; head: number }>;
+  in_app: Array<{ tag: string | null; eid: string | null }>;
 }
 
 const OWN_PIC = "QHBH0156";
@@ -215,8 +230,41 @@ export function readTsiBackup(file: string): TsiBackup {
       if (s[s.length - 1] !== r.sid) s.push(r.sid);
     }
 
+    // Someone else's cattle: Purchased (or TSi's "Purchsed") = No, never Yes.
+    const isPurchased = (code: number) => /^purcha?s?e?d$|^purchsed$/i.test(traitName(code).trim());
+    const said = new Map<number, { no: Set<number>; yes: boolean }>();
+    for (const r of traits) {
+      if (!isPurchased(r.code)) continue;
+      const v = clean(r.v);
+      const x = said.get(r.tid) ?? { no: new Set<number>(), yes: false };
+      if (v && /^no$/i.test(v)) x.no.add(r.sid);
+      if (v && /^yes$/i.test(v)) x.yes = true;
+      said.set(r.tid, x);
+    }
+    for (const r of acts) if (isPurchased(r.code)) said.set(r.tid, { ...(said.get(r.tid) ?? { no: new Set<number>() }), yes: true });
+    const inApp = db.prepare("SELECT 1 FROM animals WHERE eid = ?");
+    const out = new Set<number>();
+    const keptInApp: NotOurs["in_app"] = [];
+    const bySession = new Map<number, number>();
+    for (const [tid, x] of said) {
+      if (x.yes || x.no.size === 0) continue;
+      const a = animals.find((y) => y.tid === tid);
+      if (a?.eid && inApp.get(a.eid)) { keptInApp.push({ tag: a.tag, eid: a.eid }); continue; }
+      out.add(tid);
+      for (const sid of x.no) bySession.set(sid, (bySession.get(sid) ?? 0) + 1);
+    }
+    const sessName = new Map(sessions.map((x) => [x.tid, x]));
+    const not_ours: NotOurs = {
+      head: out.size,
+      sessions: [...bySession].map(([sid, head]) => ({ name: sessName.get(sid)?.name ?? `session ${sid}`, date: sessName.get(sid)?.date ?? "", head })),
+      in_app: keptInApp,
+    };
+    const keep = <T extends { tid: number }>(xs: T[]) => xs.filter((x) => !out.has(x.tid));
+    for (const tid of out) { delete life[tid]; delete seen[tid]; }
+    for (const k of Object.keys(flags)) if (out.has(Number(k.split(":")[0]))) delete flags[k];
+
     const last = sessions.reduce((m, s) => (s.date > m ? s.date : m), "");
-    return { backup_date: last, animals, sessions, events, life, seen, flags };
+    return { backup_date: last, animals: keep(animals), sessions, events: keep(events), life, seen, flags, not_ours };
   } finally {
     t.close();
   }
@@ -281,6 +329,7 @@ export interface TsiPlan {
   /** Already in app mobs: TSi's own status for them. */
   matched_by_mob: Array<{ mob_id: number; name: string; head: number; records_before: number; tsi_matched: number; tsi_status: Record<string, number> }>;
   conflicts: Array<{ tag: string | null; eid: string | null; mob: string; tsi: string }>;
+  not_ours: NotOurs;
 }
 
 interface Prepared {
@@ -494,6 +543,7 @@ export function planTsi(b: TsiBackup): TsiPlan {
     unplaced_total: p.unplaced.size,
     matched_by_mob,
     conflicts,
+    not_ours: b.not_ours ?? { head: 0, sessions: [], in_app: [] },
   };
 }
 
