@@ -3,7 +3,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { assignSession, lastSync, listSessions, optiweighConfigured, syncOptiweigh, syncRunning } from "../animals/optiweigh-sync.js";
 import { reportOptions, runReport, type ReportSpec } from "../animals/report.js";
-import { preRecords, ruminatiCattle, savePreRecords, setBirthByName } from "../reports/ruminati.js";
+import { preRecords, ruminatiCattle, savePreRecords, setBirthByName, setUnweaned } from "../reports/ruminati.js";
 import { logger } from "../logger.js";
 import {
   animalDeath, animalSale, animalsInMob, animalView, listAnimals, noteAnimal, searchAnimals, setSexForMob, updateAnimal, weighAnimal,
@@ -189,5 +189,16 @@ animalApi.post("/ruminati/birth", requireAdmin, (req, res) => {
   } catch (e) {
     if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
     res.status(500).json({ error: "Couldn't set the birth date" });
+  }
+});
+
+/** Marks a mob as unweaned calves (counted within the cows) until a weaning date. */
+animalApi.post("/ruminati/unweaned", requireAdmin, (req, res) => {
+  const b = (req.body ?? {}) as { name?: unknown; on?: unknown; weaned_on?: unknown };
+  try {
+    res.json({ ok: true, list: setUnweaned(String(b.name ?? ""), b.on === true, b.weaned_on) });
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    res.status(500).json({ error: "Couldn't save that" });
   }
 });

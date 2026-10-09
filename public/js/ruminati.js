@@ -72,8 +72,10 @@ export async function openRuminati(ctx) {
             ${r.mobs.map((m, i) => `<tr><td>${escapeHtml(m.name)}${m.records > 1 ? ` <span class="muted tiny">${m.records} records</span>` : ""}${m.owner ? `<div class="muted tiny">owner ${escapeHtml(m.owner)}</div>` : ""}</td>
               <td class="num">${m.avg_head}</td>
               <td>${m.births.map((b) => escapeHtml(b.slice(0, 7))).join(", ")}${m.missing_birth ? `${m.births.length ? "<br>" : ""}<span class="bad tiny">${m.missing_birth === m.records ? "not recorded" : `${m.missing_birth} without`}</span>${ctx.canEdit ? `<div class="birthset"><input type="month" data-bm="${i}" aria-label="Birth month for ${escapeHtml(m.name)}"><button class="linkbtn" data-bset="${i}">Set</button></div>` : ""}` : ""}</td>
-              <td class="tiny">${[m.split ? `split ${escapeHtml(m.split)}` : "", m.no_weight ? "never weighed" : m.listed_only ? "AgriWebb's listed weight only" : ""].filter(Boolean).join("; ")}</td></tr>`).join("")}
+              <td class="tiny">${[m.split ? `split ${escapeHtml(m.split)}` : "", m.no_weight ? "never weighed" : m.listed_only ? "AgriWebb's listed weight only" : ""].filter(Boolean).join("; ")}
+                ${ctx.canEdit || m.unweaned ? `<div class="unweaned"><label class="radio"><input type="checkbox" data-uw="${i}"${m.unweaned ? " checked" : ""}${ctx.canEdit ? "" : " disabled"}> Unweaned calves</label>${m.unweaned ? ` <span class="muted">weaned</span> <input type="date" data-uwd="${i}" value="${m.weaned_on || ""}"${ctx.canEdit ? "" : " disabled"}>` : ""}</div>` : ""}</td></tr>`).join("")}
           </tbody></table>
+          <p class="muted tiny">Tick <b>Unweaned calves</b> for calves still on their mothers: Ruminati counts them within the cows, so they're left out of the classes until the weaning date (blank: not weaned by the end of the year).</p>
           <p class="muted tiny">A mob without a birth date is aged from its group (weaners under one, cows over two, the rest one to two), which may put it in the wrong class. Setting a birth month here fills every mob record of that name that has none.</p>
 
           <h3>Before the records</h3>
@@ -121,6 +123,18 @@ export async function openRuminati(ctx) {
         ctx.toast(e.message, { error: true });
       }
     };
+    const saveUw = async (i) => {
+      const box = d.querySelector(`[data-uw="${i}"]`);
+      const date = d.querySelector(`[data-uwd="${i}"]`);
+      try {
+        await send("POST", "/api/ruminati/unweaned", { name: r.mobs[i].name, on: box.checked, weaned_on: date ? date.value : null });
+        load();
+      } catch (e) {
+        ctx.toast(e.message, { error: true });
+      }
+    };
+    d.querySelectorAll("[data-uw]").forEach((b) => { b.onchange = () => saveUw(Number(b.dataset.uw)); });
+    d.querySelectorAll("[data-uwd]").forEach((b) => { b.onchange = () => saveUw(Number(b.dataset.uwd)); });
     d.querySelectorAll("[data-bset]").forEach((b) => {
       b.onclick = async () => {
         const i = Number(b.dataset.bset);

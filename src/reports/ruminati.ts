@@ -68,6 +68,27 @@ export function preRecords(): PreRecord[] {
   return s ? (JSON.parse(s) as PreRecord[]) : [];
 }
 
+/**
+ * Calves still on their mothers: Ruminati counts unweaned calves within the
+ * cows, so a mob of them is left out of the classes until it was weaned.
+ * By mob name (AgriWebb's split records of one lot share it); the date it
+ * was weaned, or null for not yet.
+ */
+export function unweaned(): Record<string, string | null> {
+  const s = getSetting("ruminati_unweaned");
+  return s ? (JSON.parse(s) as Record<string, string | null>) : {};
+}
+
+export function setUnweaned(name: string, on: boolean, weanedOn: unknown): Record<string, string | null> {
+  const list = unweaned();
+  if (!db.prepare("SELECT 1 FROM mobs WHERE name = ?").get(name)) throw new StockError("No mob of that name");
+  const d = typeof weanedOn === "string" && weanedOn ? weanedOn : null;
+  if (d !== null && !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new StockError("Give the weaning date as YYYY-MM-DD");
+  if (on) list[name] = d; else delete list[name];
+  setSetting("ruminati_unweaned", JSON.stringify(list));
+  return list;
+}
+
 export function savePreRecords(list: unknown): PreRecord[] {
   if (!Array.isArray(list)) throw new StockError("Expected a list");
   const mobs = new Set((db.prepare("SELECT id FROM mobs").all() as Array<{ id: number }>).map((m) => m.id));
@@ -260,13 +281,16 @@ export function ruminatiCattle(fyEnd: number) {
     const season = seasonOf(dateOf(d));
     daysIn.set(season, (daysIn.get(season) ?? 0) + 1);
   }
+  const calves = unweaned();
   for (const [mobId, days] of head) {
     const mob = mobs.get(mobId);
     if (!mob) continue;
+    const weaned = mob.name in calves ? (calves[mob.name] ? dayNo(calves[mob.name]!) : Infinity) : -Infinity;
     const split = splitOf(mob);
     const cowMob = /cow/i.test(mob.age_class ?? "") || /\bcows?\b/i.test(mob.name);
     let headDays = 0, guessedAge = false;
     for (const [d, n] of days) {
+      if (d < weaned) continue; // still on the cows: counted within them
       const season = seasonOf(dateOf(d));
       const { age, guessed } = ageYears(mob.birth_date, mob.age_class, d);
       guessedAge ||= guessed;
@@ -325,6 +349,7 @@ export function ruminatiCattle(fyEnd: number) {
   }
   const mobList = [...byName.values()].map((g) => ({
     name: g.name, records: g.records, avg_head: Math.round(g.head_days / (to - from + 1)), owner: g.owner,
+    unweaned: g.name in calves, weaned_on: calves[g.name] ?? null,
     sex: [...g.sexes].join(", "), births: [...g.births].sort(), missing_birth: g.missing_birth,
     split: g.split === "mob" ? null : g.split, no_weight: g.no_weight, listed_only: g.listed_only,
   })).sort((a, b) => b.avg_head - a.avg_head);
