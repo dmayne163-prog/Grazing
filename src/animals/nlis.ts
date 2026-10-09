@@ -228,8 +228,11 @@ export function nlisUnknownArrivals() {
  * day). Records only: the mob's head count doesn't change, and it's refused if
  * the mob would end up with more animals than head. One batch, undoable.
  */
-export function addFromNlis(pic: string | null, date: string, mobId: number, sex: string | null, username: string | null) {
-  const mob = db.prepare("SELECT id, name, owner, birth_date, breed FROM mobs WHERE id = ?").get(mobId) as { id: number; name: string; owner: string | null; birth_date: string | null; breed: string | null } | undefined;
+export function addFromNlis(pic: string | null, date: string, mobId: number | null, sex: string | null, username: string | null) {
+  // Without a mob: records only, put in their mob by EID when they next go over the scales.
+  const mob = mobId === null
+    ? { id: null, name: "no mob (until they're next scanned)", owner: null, birth_date: null, breed: null }
+    : db.prepare("SELECT id, name, owner, birth_date, breed FROM mobs WHERE id = ?").get(mobId) as { id: number; name: string; owner: string | null; birth_date: string | null; breed: string | null } | undefined;
   if (!mob) throw new StockError("No such mob");
   if (sex !== null && !["female", "steer", "male", "stag"].includes(sex)) throw new StockError("Unknown sex");
   const known = new Set((db.prepare("SELECT eid FROM animals WHERE eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
@@ -247,7 +250,7 @@ export function addFromNlis(pic: string | null, date: string, mobId: number, sex
     return h;
   })();
   const have = allSummaries().filter((a) => a.status === "alive" && a.mob_id === mobId).length;
-  if (have + rows.length > head) {
+  if (mobId !== null && have + rows.length > head) {
     throw new StockError(`${mob.name} has ${head} hd and ${have} animal records: ${rows.length} more would be more animals than head.`);
   }
   const first = (db.prepare("SELECT MIN(date) d FROM mob_events WHERE mob_id = ?").get(mobId) as { d: string | null }).d;
@@ -262,7 +265,8 @@ export function addFromNlis(pic: string | null, date: string, mobId: number, sex
     for (const r of rows) {
       const id = Number(ins.run(r.eid, r.nlis_id, sex, mob.breed, mob.birth_date, origin, batch, now, now).lastInsertRowid);
       link.run(id, r.id);
-      addAnimalEvent(id, { date: joinDate, kind: "join", mob_id: mobId, data: { from: `NLIS arrival from ${origin} ${date}`, nvd: r.nvd } }, "nlis", username, batch);
+      if (mobId !== null) addAnimalEvent(id, { date: joinDate, kind: "join", mob_id: mobId, data: { from: `NLIS arrival from ${origin} ${date}`, nvd: r.nvd } }, "nlis", username, batch);
+      else addAnimalEvent(id, { date, kind: "note", text: `Arrived from ${origin} (NLIS${r.nvd ? `, NVD ${r.nvd}` : ""}); not yet in a mob here` }, "nlis", username, batch);
     }
   })();
   return { batch, added: rows.length, summary: `added ${rows.length} animal records from the NLIS arrival from ${origin} on ${date}, in ${mob.name}` };

@@ -877,7 +877,9 @@ stockApi.get("/nlis/arrivals", (_req, res) => {
 stockApi.post("/nlis/arrivals/add", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as { pic?: unknown; date?: unknown; mob_id?: unknown; sex?: unknown };
   act(res, () => {
-    const r = addFromNlis(typeof b.pic === "string" ? b.pic : null, String(b.date ?? ""), Number(b.mob_id), typeof b.sex === "string" && b.sex ? b.sex : null, who(req));
+    const mobId = b.mob_id === "none" ? null : Number(b.mob_id);
+    if (mobId !== null && !Number.isInteger(mobId)) throw new StockError("Choose a mob");
+    const r = addFromNlis(typeof b.pic === "string" ? b.pic : null, String(b.date ?? ""), mobId, typeof b.sex === "string" && b.sex ? b.sex : null, who(req));
     logAction(req, r.summary);
     return r;
   });

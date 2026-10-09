@@ -49,7 +49,7 @@ export async function openNlisCheck(ctx) {
           <p class="muted small">Create an animal record for each tag in a delivery and put them in their mob. Records only: head counts don't change.</p>
           <table class="list"><tbody>${arrivals.map((a, i) => `<tr>
             <td><b>${a.head}</b> tags · ${escapeHtml(a.name || a.pic || "?")} <span class="muted">${escapeHtml(a.pic || "")} · arrived ${day(a.date)}</span></td>
-            <td><select data-am="${i}" aria-label="Mob"><option value="">Mob…</option>${[...ctx.state.mobs].sort((x, y) => x.name.localeCompare(y.name)).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</select>
+            <td><select data-am="${i}" aria-label="Mob"><option value="">Mob…</option><option value="none">Not in a mob yet (placed when next scanned)</option>${[...ctx.state.mobs].sort((x, y) => x.name.localeCompare(y.name)).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${m.head} hd</option>`).join("")}</select>
               <select data-as="${i}" aria-label="Sex"><option value="">Sex not known</option><option value="female">Heifers / cows</option><option value="steer">Steers</option><option value="male">Bulls</option></select></td>
             <td><button class="btn" data-ago="${i}">Add</button></td></tr>`).join("")}</tbody></table>` : ""}
         ${LISTS.map(([k, title, help, cols]) => `
@@ -73,7 +73,7 @@ export async function openNlisCheck(ctx) {
       if (!mob) { ctx.toast("Choose the mob they're in", { error: true }); return; }
       b.disabled = true;
       try {
-        const res = await send("POST", "/api/nlis/arrivals/add", { pic: arrivals[i].pic, date: arrivals[i].date, mob_id: Number(mob), sex: sex || null });
+        const res = await send("POST", "/api/nlis/arrivals/add", { pic: arrivals[i].pic, date: arrivals[i].date, mob_id: mob === "none" ? "none" : Number(mob), sex: sex || null });
         undoable(ctx, res.summary, res.batch);
         openNlisCheck(ctx);
       } catch (e) {
