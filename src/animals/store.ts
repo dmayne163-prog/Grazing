@@ -275,6 +275,19 @@ export function animalView(id: number) {
     } else if (!spans.length && end && arrivedAt) {
       const sold = db.prepare(`SELECT mob_id, -SUM(head_change) head FROM mob_events WHERE kind = 'sale' AND date BETWEEN date(?, '-5 days') AND date(?, '+2 days')
         GROUP BY mob_id ORDER BY ABS(julianday(MIN(date)) - julianday(?)), head DESC`).all(end.date, end.date, end.date) as Array<{ mob_id: number; head: number }>;
+      if (sold.length > 1) {
+        // Several mobs sold about then: the one its lot is in. The mobs the
+        // animals it was first handled with joined, matched on the start of
+        // the name ("Purple Tag …" against "Yellow Tag …").
+        const firstSession = ev.find((e) => e.session_id !== null)?.session_id ?? null;
+        const stem = (n: string) => n.toLowerCase().split(/\s+/).slice(0, 2).join(" ");
+        const mates = firstSession === null ? [] : (db.prepare(`
+          SELECT m.name FROM animal_events j JOIN mobs m ON m.id = j.mob_id
+          WHERE j.kind = 'join' AND j.animal_id IN (SELECT DISTINCT animal_id FROM animal_events WHERE session_id = ?)
+        `).all(firstSession) as Array<{ name: string }>).map((r) => stem(r.name));
+        const score = (mobId: number) => { const n = stem(mobName(mobId) ?? ""); return mates.filter((x) => x === n).length; };
+        sold.sort((x, y) => score(y.mob_id) - score(x.mob_id));
+      }
       if (sold.length) { mobBefore = sold[0]!.mob_id; until = end.date; }
     }
     // And back through the mobs each was drafted or split from, to its arrival.
