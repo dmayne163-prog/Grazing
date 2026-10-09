@@ -277,10 +277,16 @@ export function animalView(id: number) {
         GROUP BY mob_id ORDER BY ABS(julianday(MIN(date)) - julianday(?)), head DESC`).all(end.date, end.date, end.date) as Array<{ mob_id: number; head: number }>;
       if (sold.length) { mobBefore = sold[0]!.mob_id; until = end.date; }
     }
-    if (mobBefore !== null && until !== null) {
+    // And back through the mobs each was drafted or split from, to its arrival.
+    for (let depth = 0; mobBefore !== null && until !== null && depth < 8; depth++) {
       const start = firstDay(mobBefore);
       const from = start && arrivedAt! < start ? start : arrivedAt!;
       if (from < until) spans.unshift({ mob_id: mobBefore, from, to: until, assumed: true });
+      if (!start || start <= arrivedAt!) break;
+      const parent = parentOf(mobBefore, start);
+      if (parent === null || parent === mobBefore) break;
+      mobBefore = parent;
+      until = start;
     }
   }
   const segs = allSegments();
