@@ -43,7 +43,7 @@ const PROCESSORS: Record<string, string> = {
 const PLACES: Record<string, string> = {
   QIBH0131: "Penjobe",
   QBBH0059: "The Pocket (Jim Bishop, Rolleston)",
-  QJMK0252: "Julia Creek",
+  QJMK0252: "Coolreagh, Julia Creek",
   QJJI0136: "Terrick Terrick, Blackall",
   EUSY4720: "Emerald saleyards",
 };
