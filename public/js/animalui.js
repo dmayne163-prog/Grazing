@@ -108,9 +108,9 @@ export async function renderAnimal(ctx, id, root) {
     })()}</p>` : ""}
     ${v.paddocks.length ? `<ul class="history">${v.paddocks.map((p) => `
       <li><span class="when">${span(p.from, p.to)}</span><span class="grow">${p.known
-        ? `${escapeHtml(p.paddocks.join(" + "))}${p.inferred ? ' <span class="chip inferred" title="Through a gate inferred to have been open">inferred gate</span>' : ""}<br><span class="muted tiny">with ${escapeHtml(p.mob_name || "")}${p.seen.length ? ` · <b>handled here</b> ${p.seen.slice(0, 4).map((d) => escapeHtml(d)).join(", ")}${p.seen.length > 4 ? " …" : ""}` : " · going by its mob's moves"}</span>`
+        ? `${escapeHtml(p.paddocks.join(" + "))}${p.inferred ? ' <span class="chip inferred" title="Through a gate inferred to have been open">inferred gate</span>' : ""}<br><span class="muted tiny">${p.assumed ? `<span class="chip inferred" title="Not on record: taken from the mob it was drafted from, or the mob a sale was recorded from when it left">assumed</span> ` : ""}with ${escapeHtml(p.mob_name || "")}${p.seen.length ? ` · <b>handled here</b> ${p.seen.slice(0, 4).map((d) => escapeHtml(d)).join(", ")}${p.seen.length > 4 ? " …" : ""}` : " · going by its mob's moves"}</span>`
         : `<span class="muted">On the property, paddock not recorded</span>${p.seen.length ? `<br><span class="muted tiny">handled ${p.seen.slice(0, 4).map((d) => escapeHtml(d)).join(", ")}${p.seen.length > 4 ? " …" : ""}</span>` : ""}`}</span></li>`).join("")}</ul>
-      <p class="muted tiny">A paddock comes from the mob it was in and that mob's moves. "Handled here" means it was weighed or processed during that stay; otherwise it's going by its mob. The app's paddock records start when AgriWebb's movement history did.</p>`
+      <p class="muted tiny">A paddock comes from the mob it was in and that mob's moves. "Handled here" means it was weighed or processed during that stay; otherwise it's going by its mob. "Assumed" means the mob itself isn't on record for that time: it's the mob it was drafted from, or the one a sale was recorded from when it left. The app's paddock records start when AgriWebb's movement history did.</p>`
     : '<p class="muted small">No paddock history: not placed in a mob yet.</p>'}
 
     <h3>History</h3>

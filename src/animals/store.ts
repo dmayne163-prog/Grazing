@@ -237,7 +237,7 @@ export function animalView(id: number) {
   });
 
   // Mob memberships, then the paddocks each mob was in during them.
-  const spans: Array<{ mob_id: number; from: string; to: string | null }> = [];
+  const spans: Array<{ mob_id: number; from: string; to: string | null; assumed?: boolean }> = [];
   for (const e of ev) {
     if (e.kind === "join" && e.mob_id !== null) {
       const open = spans[spans.length - 1];
@@ -249,8 +249,42 @@ export function animalView(id: number) {
       if (open && open.to === null) open.to = e.date;
     }
   }
+  // Before its first recorded mob, an animal is assumed to have been with the
+  // mob that one was drafted from that day (Heavy Heifers came out of Number 5
+  // on 2 Oct), back to when it arrived. One that left without ever being put
+  // in a mob is assumed to have been in the mob with a sale recorded within a
+  // few days of its leaving. Both are shown as assumed, not recorded.
+  {
+    const nl = a.eid ? db.prepare("SELECT direction, date FROM nlis_movements WHERE eid = ? ORDER BY date").all(a.eid) as Array<{ direction: string; date: string }> : [];
+    const arrivedAt = nl.find((n) => n.direction === "on")?.date ?? ev[0]?.date ?? null;
+    const end = ev.find((e) => ENDS.includes(e.kind));
+    const firstDay = (mobId: number) => (db.prepare("SELECT MIN(date) d FROM mob_events WHERE mob_id = ?").get(mobId) as { d: string | null }).d;
+    const parentOf = (mobId: number, onDate: string): number | null => {
+      for (const e of db.prepare("SELECT kind, data FROM mob_events WHERE mob_id = ? AND date = ? AND kind IN ('opening', 'transfer')").all(mobId, onDate) as Array<{ kind: string; data: string }>) {
+        const d = JSON.parse(e.data) as Record<string, unknown>;
+        const p = d["drafted_from"] ?? (e.kind === "opening" ? d["from_mob"] : undefined) ?? (e.kind === "transfer" && !d["merged"] ? d["from_mob"] : undefined);
+        if (typeof p === "number") return p;
+      }
+      return null;
+    };
+    let mobBefore: number | null = null, until: string | null = null;
+    if (spans.length && arrivedAt && spans[0]!.from > arrivedAt) {
+      const first = spans[0]!;
+      mobBefore = parentOf(first.mob_id, first.from) ?? first.mob_id;
+      until = first.from;
+    } else if (!spans.length && end && arrivedAt) {
+      const sold = db.prepare(`SELECT mob_id, -SUM(head_change) head FROM mob_events WHERE kind = 'sale' AND date BETWEEN date(?, '-5 days') AND date(?, '+2 days')
+        GROUP BY mob_id ORDER BY ABS(julianday(MIN(date)) - julianday(?)), head DESC`).all(end.date, end.date, end.date) as Array<{ mob_id: number; head: number }>;
+      if (sold.length) { mobBefore = sold[0]!.mob_id; until = end.date; }
+    }
+    if (mobBefore !== null && until !== null) {
+      const start = firstDay(mobBefore);
+      const from = start && arrivedAt! < start ? start : arrivedAt!;
+      if (from < until) spans.unshift({ mob_id: mobBefore, from, to: until, assumed: true });
+    }
+  }
   const segs = allSegments();
-  type Stay = { from: string; to: string | null; mob_id: number | null; mob_name: string | null; paddocks: string[]; inferred: boolean; seen: string[]; known: boolean };
+  type Stay = { from: string; to: string | null; mob_id: number | null; mob_name: string | null; paddocks: string[]; inferred: boolean; seen: string[]; known: boolean; assumed: boolean };
   const paddocks: Stay[] = [];
   for (const s of spans) {
     for (const g of segs.filter((x) => x.mob_id === s.mob_id)) {
@@ -260,10 +294,10 @@ export function animalView(id: number) {
       if (to !== null && to <= from) continue;
       const names = g.paddock_ids.map((p) => getFeature(p)?.name ?? `#${p}`);
       const last = paddocks[paddocks.length - 1];
-      if (last && last.mob_id === s.mob_id && last.to === from && last.paddocks.join() === names.join() && last.inferred === g.inferred) {
+      if (last && last.mob_id === s.mob_id && last.to === from && last.paddocks.join() === names.join() && last.inferred === g.inferred && last.assumed === !!s.assumed) {
         last.to = to;
       } else {
-        paddocks.push({ from, to, mob_id: s.mob_id, mob_name: mobName(s.mob_id), paddocks: names, inferred: g.inferred, seen: [], known: true });
+        paddocks.push({ from, to, mob_id: s.mob_id, mob_name: mobName(s.mob_id), paddocks: names, inferred: g.inferred, seen: [], known: true, assumed: !!s.assumed });
       }
     }
   }
@@ -281,13 +315,13 @@ export function animalView(id: number) {
     const filled: Stay[] = [];
     let cursor = arrived;
     for (const p of paddocks) {
-      if (p.from > cursor) filled.push({ from: cursor, to: p.from, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false });
+      if (p.from > cursor) filled.push({ from: cursor, to: p.from, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false, assumed: false });
       filled.push(p);
       if (p.to === null) { cursor = "9999"; break; }
       if (p.to > cursor) cursor = p.to;
     }
     if (cursor !== "9999" && (!left || cursor < left)) {
-      filled.push({ from: cursor, to: left, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false });
+      filled.push({ from: cursor, to: left, mob_id: null, mob_name: null, paddocks: [], inferred: false, seen: [], known: false, assumed: false });
     }
     paddocks.splice(0, paddocks.length, ...filled.filter((p) => !(p.to !== null && p.to <= p.from)));
   }
