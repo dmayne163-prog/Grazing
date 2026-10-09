@@ -190,13 +190,17 @@ export function nlisCheck() {
   const on = db.prepare("SELECT * FROM nlis_movements WHERE direction = 'on'").all() as Array<{ eid: string | null; nlis_id: string | null; pic: string | null; date: string }>;
   const offEids = new Set((db.prepare("SELECT eid FROM nlis_movements WHERE direction = 'off' AND eid IS NOT NULL").all() as Array<{ eid: string }>).map((r) => r.eid));
   const lastSeen = db.prepare("SELECT MAX(date) d FROM animal_events WHERE animal_id = ? AND kind IN ('weigh', 'treatment', 'score', 'note')");
+  const endOf = db.prepare("SELECT date, text, json_extract(data, '$.destination') dest FROM animal_events WHERE animal_id = ? AND kind IN ('death', 'sale', 'gone') ORDER BY date LIMIT 1");
   const ended = [], unknown = [], noMob = [];
   for (const r of on) {
     if (r.eid && offEids.has(r.eid)) continue;
     const a = r.eid ? animals.get(r.eid) : undefined;
     const row = { eid: r.eid, nlis_id: r.nlis_id, from_pic: r.pic, arrived: r.date };
     if (!a) unknown.push(row);
-    else if (a.status !== "alive") ended.push({ ...row, tag: a.tag, app_status: a.status, last_seen: (lastSeen.get(a.id) as { d: string | null }).d });
+    else if (a.status !== "alive") {
+      const e = endOf.get(a.id) as { date: string; text: string | null; dest: string | null } | undefined;
+      ended.push({ ...row, tag: a.tag, app_status: a.status, last_seen: (lastSeen.get(a.id) as { d: string | null }).d, gone_on: e?.date ?? null, why: e?.text ?? (e?.dest ? `to ${e.dest}` : null) });
+    }
     else if (a.mob_id === null) noMob.push({ ...row, tag: a.tag, last_seen: (lastSeen.get(a.id) as { d: string | null }).d });
   }
   const conflicts = (db.prepare(`

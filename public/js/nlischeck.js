@@ -16,7 +16,7 @@ const STATUS = { sold: "sold", dead: "dead", gone: "off the books" };
 const LISTS = [
   ["ended", "NLIS holds them here; the app has them as gone",
     "Most likely dead or sold without the NLIS transfer. Record the death (or the transfer) in NLIS.",
-    [["eid", "EID"], ["tag", "Tag"], ["from_pic", "Came from"], ["arrived", "Arrived"], ["app_status", "App"], ["last_seen", "Last seen here"]]],
+    [["eid", "EID"], ["tag", "Tag"], ["from_pic", "Came from"], ["arrived", "Arrived"], ["app_status", "App"], ["last_seen", "Last seen here"], ["gone_on", "Gone on (app)"], ["why", "Why the app has it gone"]]],
   ["no_mob", "NLIS holds them here; in the app but not in any mob",
     "Probably still here: put them in their mob from the Animals tab (Not in a mob).",
     [["eid", "EID"], ["tag", "Tag"], ["from_pic", "Came from"], ["arrived", "Arrived"], ["last_seen", "Last seen here"]]],
@@ -39,7 +39,7 @@ export async function openNlisCheck(ctx) {
     d.querySelector(".body").innerHTML = `<div class="note err">${escapeHtml(e.message)}</div>`;
     return;
   }
-  const fmt = (row, k) => (k === "eid" ? eidText(row.eid) : k === "arrived" || k === "last_seen" || k === "date" ? day(row[k]) : k === "app_status" ? STATUS[row[k]] || row[k] : row[k] ?? "");
+  const fmt = (row, k) => (k === "eid" ? eidText(row.eid) : k === "arrived" || k === "last_seen" || k === "date" || k === "gone_on" ? day(row[k]) : k === "app_status" ? STATUS[row[k]] || row[k] : row[k] ?? "");
   const reports = r.reports.map((x) => `${x.direction === "off" ? "moved off" : "moved on (active)"}: ${x.n.toLocaleString("en-AU")} tags, ${day(x.from_date)} to ${day(x.to_date)}`).join("; ");
   d.innerHTML = `
     <div class="dlg wide report">
