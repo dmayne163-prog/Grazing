@@ -172,6 +172,54 @@ export function ruminatiCattle(fyEnd: number) {
     return { kg: a.kg + gain * (day - a.day), gain };
   };
 
+  // A mob of one sex that once held some of another: cattle of the other sex
+  // drafted out of it (AgriWebb's No.5s held 257 steers until February), or
+  // drafted into it. Before such a draft out, and after such a draft in, those
+  // head are counted as their own sex, not the mob's.
+  type Adj = { day: number; sex: "female" | "steer" | "male"; head: number; before: boolean };
+  const adjust = new Map<number, Adj[]>();
+  const sexOf = (id: number) => {
+    const x = mobs.get(id)?.sex;
+    return x === "female" || x === "steer" || x === "male" ? x : null;
+  };
+  const seenDraft = new Set<string>();
+  const voidedEarly = voidedIds();
+  const addAdj = (mob: number, other: number, a: Adj) => {
+    const k = `${mob}|${other}|${a.day}|${a.before}`;
+    if (seenDraft.has(k)) return;
+    seenDraft.add(k);
+    adjust.set(mob, [...(adjust.get(mob) ?? []), a]);
+  };
+  for (const e of db.prepare("SELECT id, mob_id, date, kind, head, head_change, data FROM mob_events WHERE kind IN ('transfer', 'opening')").all() as Array<{ id: number; mob_id: number; date: string; kind: string; head: number | null; head_change: number | null; data: string }>) {
+    if (voidedEarly.has(e.id)) continue;
+    const d = JSON.parse(e.data) as Record<string, unknown>;
+    if (e.kind === "transfer" && e.head_change !== null && e.head_change < 0 && typeof d["to_mob"] === "number") {
+      const p = sexOf(e.mob_id), c = sexOf(d["to_mob"]);
+      if (p && c && p !== c) addAdj(e.mob_id, d["to_mob"], { day: dayNo(e.date), sex: c, head: -e.head_change, before: true });
+    } else if (e.kind === "transfer" && e.head_change !== null && e.head_change > 0 && typeof d["from_mob"] === "number") {
+      const p = sexOf(d["from_mob"]), c = sexOf(e.mob_id);
+      if (p && c && p !== c) addAdj(e.mob_id, d["from_mob"], { day: dayNo(e.date), sex: p, head: e.head_change, before: false });
+    } else if (e.kind === "opening" && e.head && (typeof d["from_mob"] === "number" || typeof d["drafted_from"] === "number")) {
+      const parent = Number(d["from_mob"] ?? d["drafted_from"]);
+      const p = sexOf(parent), c = sexOf(e.mob_id);
+      if (p && c && p !== c) addAdj(parent, e.mob_id, { day: dayNo(e.date), sex: c, head: e.head, before: true });
+    }
+  }
+  /** That day's head by sex, for a mob whose sex is set but which held others. */
+  const daySplit = (mob: MobInfo, day: number, n: number): Record<"female" | "steer" | "male", number> | null => {
+    const list = adjust.get(mob.id);
+    const own = sexOf(mob.id);
+    if (!list || !own) return null;
+    const out = { female: 0, steer: 0, male: 0 };
+    for (const a of list) if (a.before ? day < a.day : day >= a.day) out[a.sex] += a.head;
+    const other = out.female + out.steer + out.male - out[own];
+    if (other <= 0) return null;
+    const scale = other > n ? n / other : 1;
+    for (const k of ["female", "steer", "male"] as const) if (k !== own) out[k] *= scale;
+    out[own] = n - (other * scale);
+    return out;
+  };
+
   // How a mob of mixed sex splits: its animals' recorded sexes, else halves.
   const sexSplit = new Map<number, { female: number; steer: number; male: number; basis: string }>();
   const splitOf = (m: MobInfo) => {
@@ -224,8 +272,9 @@ export function ruminatiCattle(fyEnd: number) {
       guessedAge ||= guessed;
       const w = weightOn(mobId, d);
       headDays += n;
+      const heads = daySplit(mob, d, n);
       for (const sex of ["female", "steer", "male"] as const) {
-        const share = n * split[sex];
+        const share = heads ? heads[sex] : n * split[sex];
         if (share <= 0) continue;
         const key = `${classFor(sex, cowMob, age)}|${season}`;
         const a = acc.get(key) ?? { headDays: 0, kgHead: 0, kgN: 0, gainHead: 0, gainN: 0, weighed: false };
