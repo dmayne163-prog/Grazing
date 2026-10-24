@@ -44,6 +44,14 @@ export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): 
   return next;
 }
 
+/**
+ * Areas that aren't paddocks to rotate through: a "management only" area (like
+ * "lost boys and girls", where AgriWebb kept cattle whose paddock wasn't
+ * known), and holding areas (yards). Never offered, and stock in one aren't
+ * planned until they're put in a real paddock.
+ */
+const notForGrazing = (subtype: string | null) => /management|holding/i.test(subtype ?? "");
+
 const DAY = 86_400_000;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY);
@@ -82,8 +90,14 @@ export function planGroups(): PlanGroup[] {
 /** Ranks the options and turns the projection into a plan. */
 export function makePlan(proj: PlanProjection, rules: PlanRules) {
   const now = today();
-  const groups = together();
   const pad = new Map(proj.paddocks.map((p) => [p.id, p]));
+  const skip = new Set(proj.paddocks.filter((p) => notForGrazing(p.subtype)).map((p) => p.id));
+  const all = together();
+  const groups = all.filter((g) => g.paddocks.some((id) => !skip.has(id)));
+  const unplanned = all.filter((g) => !g.paddocks.some((id) => !skip.has(id))).map((g) => ({
+    mob: g.views.map((v) => v.mob.name).join(" + "), head: g.views.reduce((t, v) => t + v.state.head, 0),
+    where: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`).join(" + "),
+  }));
   const occupied = new Set(groups.flatMap((g) => g.paddocks));
   const hist = paddockHistories();
   const gates = listGates().filter((g) => g.paddocks.length === 2);
@@ -108,7 +122,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     if (!left) notes.push("no pasture readings for where it is");
 
     const options = (proj.options[key] ?? [])
-      .filter((o) => !occupied.has(o.paddock_id) && o.days.median >= rules.min_days)
+      .filter((o) => !occupied.has(o.paddock_id) && !skip.has(o.paddock_id) && o.days.median >= rules.min_days)
       .map((o) => {
         const h = hist.get(o.paddock_id);
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
@@ -144,5 +158,5 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     m.suggested = pick;
     if (pick) taken.add(pick.paddock_id);
   }
-  return { as_of: proj.as_of, rules, mobs };
+  return { as_of: proj.as_of, rules, mobs, unplanned };
 }

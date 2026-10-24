@@ -68,6 +68,7 @@ export async function openPlan(ctx) {
             ${!m.suggested ? '<p class="small bad">Every paddock with a week of feed is already taken by a more urgent mob.</p>' : ""}`
             : `<p class="small bad">No empty paddock has ${r.min_days} days of feed for this mob above ${nf(r.residual)} kg/ha.</p>`}
           </section>`).join("")}
+        ${p.unplanned?.length ? `<p class="small muted">Not planned (in a management-only or holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
         <p class="muted tiny">Days of feed: until the paddock is grazed down to the residual by this mob, with growth from today's soil water across past seasons — the median, and a drier run in brackets. Capped at the longest stay ("+" means more feed than that). Bold is the suggestion: the most urgent mob gets its best paddock first. Rested: days since the paddock was last grazed. Only empty paddocks with pasture readings are offered.</p>
       </div>
       <footer class="btns"><button class="btn" id="plClose">Close</button></footer>

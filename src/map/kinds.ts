@@ -24,7 +24,7 @@ export const KINDS: KindDef[] = [
     id: "paddock",
     label: "Paddock",
     geoms: ["polygon"],
-    subtypes: ["grazing", "cultivation", "holding", "laneway paddock", "house paddock"],
+    subtypes: ["grazing", "cultivation", "holding", "laneway paddock", "house paddock", "management only"],
   },
   { id: "boundary", label: "Property boundary", geoms: ["polygon"], subtypes: [] },
   {
