@@ -48,31 +48,52 @@ const DAY = 86_400_000;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY);
 
-/** The mobs as the planner sees them, ready for the model worker. */
-export function planGroups(): PlanGroup[] {
+type View = ReturnType<typeof mobViews>[number];
+const aeOf = (v: View) => v.ae_total ?? v.state.head;
+
+/**
+ * Mobs running together (in exactly the same paddocks) are planned as one
+ * group that moves together: the five lots of young cattle in Tablelands,
+ * the three in Western Stud.
+ */
+function together(): Array<{ key: string; views: View[]; paddocks: number[] }> {
   const views = mobViews().filter((v) => v.state.head > 0 && v.state.paddock_ids.length);
-  const aeOf = (v: (typeof views)[number]) => v.ae_total ?? v.state.head;
-  return views.map((v) => {
-    const here = new Set(v.state.paddock_ids);
-    const aeHere = views.filter((o) => o.state.paddock_ids.some((p) => here.has(p))).reduce((t, o) => t + aeOf(o), 0);
-    return { key: String(v.mob.id), ae: aeOf(v), ae_here: aeHere, paddocks: v.state.paddock_ids };
+  const groups = new Map<string, { key: string; views: View[]; paddocks: number[] }>();
+  for (const v of views) {
+    const ids = [...v.state.paddock_ids].sort((a, b) => a - b);
+    const key = ids.join("+");
+    const g = groups.get(key) ?? { key, views: [], paddocks: ids };
+    g.views.push(v);
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}
+
+/** The groups as the planner sees them, ready for the model worker. */
+export function planGroups(): PlanGroup[] {
+  const all = together();
+  return all.map((g) => {
+    const here = new Set(g.paddocks);
+    const aeHere = all.filter((o) => o.paddocks.some((p) => here.has(p))).flatMap((o) => o.views).reduce((t, v) => t + aeOf(v), 0);
+    return { key: g.key, ae: g.views.reduce((t, v) => t + aeOf(v), 0), ae_here: aeHere, paddocks: g.paddocks };
   });
 }
 
 /** Ranks the options and turns the projection into a plan. */
 export function makePlan(proj: PlanProjection, rules: PlanRules) {
   const now = today();
-  const views = mobViews().filter((v) => v.state.head > 0 && v.state.paddock_ids.length);
+  const groups = together();
   const pad = new Map(proj.paddocks.map((p) => [p.id, p]));
-  const occupied = new Set(views.flatMap((v) => v.state.paddock_ids));
+  const occupied = new Set(groups.flatMap((g) => g.paddocks));
   const hist = paddockHistories();
   const gates = listGates().filter((g) => g.paddocks.length === 2);
   const nextDoor = (a: number, b: number) => gates.some((g) => g.paddocks.includes(a) && g.paddocks.includes(b));
 
-  const mobs = views.map((v) => {
-    const key = String(v.mob.id);
+  const mobs = groups.map((g) => {
+    const key = g.key;
     const cur = proj.current[key];
-    const since = v.state.in_paddock_since ?? now;
+    // In since the first of them arrived: the paddocks have been grazed since then.
+    const since = g.views.map((v) => v.state.in_paddock_since ?? now).sort()[0]!;
     const daysIn = Math.max(0, daysBetween(since, now));
     const left = cur?.days ?? null;
     // Time's up at the longest stay, or when the feed runs down, whichever first.
@@ -91,7 +112,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       .map((o) => {
         const h = hist.get(o.paddock_id);
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
-        const adjacent = v.state.paddock_ids.some((p) => nextDoor(p, o.paddock_id));
+        const adjacent = g.paddocks.some((p) => nextDoor(p, o.paddock_id));
         const stay = Math.min(o.days.median, rules.max_days);
         // Feed for a full stay counts most, then a long rest, then being next door (less walking).
         const score = stay + Math.min(rest ?? 60, 120) / 10 + (adjacent ? 5 : 0);
@@ -103,10 +124,13 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       })
       .sort((a, b) => b.score - a.score);
 
+    const owners = [...new Set(g.views.map((v) => v.mob.owner).filter(Boolean))];
     return {
-      mob_id: v.mob.id, mob: v.mob.name, owner: v.mob.owner, head: v.state.head, ae: Math.round(v.ae_total ?? v.state.head),
-      paddocks: v.state.paddock_ids.map((id) => pad.get(id)?.name ?? `#${id}`),
-      in_since: v.state.in_paddock_since, days_in: daysIn,
+      key, mob_ids: g.views.map((v) => v.mob.id),
+      mob: g.views.map((v) => v.mob.name).join(" + "), mobs: g.views.length, owner: owners.join(", ") || null,
+      head: g.views.reduce((t, v) => t + v.state.head, 0), ae: Math.round(g.views.reduce((t, v) => t + aeOf(v), 0)),
+      paddocks: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`),
+      in_since: since, days_in: daysIn,
       now: cur?.now ?? null, days_left: left,
       move_by: addDays(now, moveIn), move_in: moveIn, why, notes,
       suggested: null as null | (typeof options)[number], options: options.slice(0, 6),

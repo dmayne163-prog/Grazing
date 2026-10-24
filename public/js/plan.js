@@ -55,7 +55,7 @@ export async function openPlan(ctx) {
         </div>
         ${p.mobs.map((m) => `
           <section class="planmob">
-            <h3>${escapeHtml(m.mob)} <span class="muted small">· ${nf(m.head)} hd, ${nf(m.ae)} AE${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}</span></h3>
+            <h3>${escapeHtml(m.mob)} <span class="muted small">· ${m.mobs > 1 ? `${m.mobs} mobs together, ` : ""}${nf(m.head)} hd, ${nf(m.ae)} AE${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}</span></h3>
             <p class="small">In <b>${escapeHtml(m.paddocks.join(" + "))}</b>${m.in_since ? ` since ${day(m.in_since)} (${m.days_in} days)` : ""}${m.now !== null ? ` · ${nf(m.now)} kg/ha now` : ""}.
               ${m.move_in <= 0 ? '<b class="bad">Move now</b>' : `Move by <b>${day(m.move_by)}</b> (${m.move_in} days)`}:
               ${m.why === "feed" ? `feed down to ${nf(r.residual)} kg/ha` : `the ${r.max_days}-day limit`}.
