@@ -853,6 +853,18 @@ function readKindFields(kind, props) {
   return out;
 }
 
+/**
+ * The "kind of …" choices for a feature type, as a drop-down. A value already
+ * saved that isn't on the list (from an import, or typed in before) is kept
+ * as its own choice so saving doesn't lose it.
+ */
+function subtypeOptions(kind, current) {
+  const list = kindDef(kind).subtypes;
+  const extra = current && !list.includes(current) ? [current] : [];
+  return [`<option value=""${current ? "" : " selected"}>—</option>`,
+    ...[...list, ...extra].map((s) => `<option value="${escapeHtml(s)}"${s === current ? " selected" : ""}>${escapeHtml(s)}</option>`)].join("");
+}
+
 function detailFormHtml(kind, name, subtype, props, cls) {
   const def = kindDef(kind);
   const kinds = state.meta.kinds.filter((k) => k.geoms.includes(cls));
@@ -863,8 +875,7 @@ function detailFormHtml(kind, name, subtype, props, cls) {
         <select id="fKind">${kinds.map((k) => `<option value="${k.id}"${k.id === kind ? " selected" : ""}>${escapeHtml(k.label)}</option>`).join("")}</select>
       </div>
       <div class="f"><label for="fSub">Kind of ${escapeHtml(def.label.toLowerCase())}</label>
-        <input id="fSub" value="${escapeHtml(subtype || "")}" list="fSubList" autocomplete="off">
-        <datalist id="fSubList">${def.subtypes.map((s) => `<option value="${escapeHtml(s)}">`).join("")}</datalist>
+        <select id="fSub">${subtypeOptions(kind, subtype || "")}</select>
       </div>
     </div>
     <div id="kindFields">${kindFields(kind, props)}</div>
@@ -943,7 +954,7 @@ function bindFeature(f) {
   $("#fKind").onchange = () => {
     const k = $("#fKind").value;
     $("#kindFields").innerHTML = kindFields(k, f.properties.props);
-    $("#fSubList").innerHTML = kindDef(k).subtypes.map((s) => `<option value="${escapeHtml(s)}">`).join("");
+    $("#fSub").innerHTML = subtypeOptions(k, "");
   };
   $("#save").onclick = async () => {
     const kind = $("#fKind").value;
@@ -1014,7 +1025,7 @@ function renderNew(def, geometry) {
   $("#fKind").onchange = () => {
     const k = $("#fKind").value;
     $("#kindFields").innerHTML = kindFields(k, {});
-    $("#fSubList").innerHTML = kindDef(k).subtypes.map((s) => `<option value="${escapeHtml(s)}">`).join("");
+    $("#fSub").innerHTML = subtypeOptions(k, "");
   };
   $("#discard").onclick = () => { editor.cancel(); endMode(); render(); };
   $("#save").onclick = async () => {
