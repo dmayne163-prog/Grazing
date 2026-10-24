@@ -605,3 +605,7 @@ table.ruminati th.num, table.ruminati td.num { width: 18%; }
 table.register td { vertical-align: top; }
 table.register tr.voided td { opacity: 0.6; }
 table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
+
+/* Rotation planner */
+.planmob { border-top: 1px solid var(--line, #2a3236); padding-top: 6px; margin-top: 10px; }
+.planmob tr.chosen td { background: rgba(95, 190, 142, 0.12); }

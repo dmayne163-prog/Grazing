@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db, setSetting } from "../db/database.js";
-import { residual, type GateCandidate, type Outlook } from "../pasture/model.js";
+import { residual, type GateCandidate, type Outlook, type PlanGroup, type PlanProjection } from "../pasture/model.js";
+import { makePlan, planGroups, planRules, setPlanRules } from "../pasture/plan.js";
 import { allSegments, today } from "../stock/store.js";
 import { parseWhen, setGate, StockError } from "../stock/actions.js";
 import { Worker } from "node:worker_threads";
@@ -79,7 +80,7 @@ function inWorker(): Promise<Outlook | null> {
 }
 
 /** Runs one of the model's slow jobs in a worker thread (see outlook-worker.ts). */
-function runJob<T>(message: { job: "outlook" } | { job: "gates"; before: string }): Promise<T> {
+function runJob<T>(message: { job: "outlook" } | { job: "gates"; before: string } | { job: "plan"; groups: PlanGroup[]; residual: number; cap: number }): Promise<T> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("../pasture/outlook-worker.js", import.meta.url));
     w.once("message", (m: { ok: boolean; result?: T; error?: string }) => {
@@ -233,4 +234,28 @@ pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
   log.info(msg);
   addEvent({ ts: Date.now(), source: "pasture", kind: "import", severity: "info", message: msg, value: null });
   res.json({ ok: true, ...r });
+});
+
+/* ------------------------------ rotation plan ----------------------------- */
+
+/** For each mob: days left where it is, when to move, and the best paddocks to go to. */
+pastureApi.get("/plan", async (_req, res) => {
+  const rules = planRules();
+  try {
+    const proj = await runJob<PlanProjection | null>({ job: "plan", groups: planGroups(), residual: rules.residual, cap: rules.max_days });
+    if (!proj) { res.json({ ok: false, reason: "No pasture readings yet: import Cibo's PastureKey readings first." }); return; }
+    res.json({ ok: true, ...makePlan(proj, rules) });
+  } catch (e) {
+    log.error("rotation plan failed", e);
+    res.status(500).json({ error: "The plan couldn't be worked out" });
+  }
+});
+
+pastureApi.put("/plan/rules", requireAdmin, (req, res) => {
+  try {
+    res.json({ ok: true, rules: setPlanRules((req.body ?? {}) as Record<string, unknown>) });
+  } catch (e) {
+    if (e instanceof StockError) { res.status(400).json({ error: e.message }); return; }
+    res.status(500).json({ error: "Couldn't save the rules" });
+  }
 });

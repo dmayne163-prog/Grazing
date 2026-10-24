@@ -444,12 +444,12 @@ export function residual(): number {
   return Number.isFinite(v) && v > 0 ? v : 1000;
 }
 
-export function buildOutlook(): Outlook | null {
+/** What every projection starts from: the inputs, the fit, soil water to today and the weather of past seasons ahead. */
+function projectionSetup() {
   const inp = loadInputs();
   if (!inp) return null;
   const fit = calibrate(inp);
   const params = fit?.params ?? DEFAULTS;
-  const R = residual();
   const n = inp.end - inp.start + 1;
 
   // Soil water up to the last day of weather, for each grid point.
@@ -469,6 +469,25 @@ export function buildOutlook(): Outlook | null {
     const W0 = hist.get(cell)!.W;
     scen.set(cell, years.map((y) => driver(w, dayNo(`${y}${md}`) - w.start, HORIZON, W0)));
   }
+  return { inp, fit, params, n, hist, lastYear, longWeather, years, scen };
+}
+
+/** A paddock's pasture today: from its latest reading, run forward with what actually happened. */
+function stateToday(ctx: NonNullable<ReturnType<typeof projectionSetup>>, p: Paddock): Float64Array | null {
+  const last = p.obs[p.obs.length - 1];
+  if (!last) return null;
+  const m = ctx.fit?.multipliers.get(p.id) ?? 1;
+  const dr = ctx.hist.get(p.cell)!;
+  const s0 = startState(last.tsdm, last.green);
+  for (let t = last.day; t <= ctx.inp.end; t++) step(s0, ctx.params, m, dr.D[t - ctx.inp.start]!, dr.WI[t - ctx.inp.start]!, dr.R[t - ctx.inp.start]!, p.ae[t - ctx.inp.start]!);
+  return s0;
+}
+
+export function buildOutlook(): Outlook | null {
+  const ctx = projectionSetup();
+  if (!ctx) return null;
+  const { inp, fit, params, n, hist, lastYear, longWeather, years, scen } = ctx;
+  const R = residual();
 
   const out: PaddockOutlook[] = [];
   const cellGrowth = new Map<string, number>();
@@ -490,9 +509,7 @@ export function buildOutlook(): Outlook | null {
     if (!last) continue;
 
     // From the latest reading up to yesterday, with what actually happened.
-    const dr = hist.get(p.cell)!;
-    const s0 = startState(last.tsdm, last.green);
-    for (let t = last.day; t <= inp.end; t++) step(s0, params, m, dr.D[t - inp.start]!, dr.WI[t - inp.start]!, dr.R[t - inp.start]!, p.ae[t - inp.start]!);
+    const s0 = stateToday(ctx, p)!;
     o.now = Math.round(s0[0]! + s0[1]!);
     o.now_green = Math.round(s0[0]!);
 
@@ -756,4 +773,85 @@ export function findOpenGates(
     }
   }
   return out.sort((x, y) => (x.from < y.from ? -1 : 1));
+}
+
+/* ------------------------------- rotation -------------------------------- */
+
+/** A mob (or the mobs sharing paddocks) for the planner: its AE and where it is. */
+/** A mob for the planner: its own AE, the AE of all stock where it is now (mobs can share), and where it is. */
+export interface PlanGroup { key: string; ae: number; ae_here: number; paddocks: number[] }
+
+export interface PlanProjection {
+  as_of: string;
+  residual: number;
+  /** Each group's days left where it is: until the paddocks it's in average below the residual. */
+  current: Record<string, { now: number | null; days: { low: number; median: number } | null }>;
+  /** For each group, each paddock it could go to: pasture now and days of grazing there alone. */
+  options: Record<string, Array<{ paddock_id: number; now: number; days: { low: number; median: number } }>>;
+  paddocks: Array<{ id: number; name: string; subtype: string | null; area_ha: number; now: number | null; last_reading: string | null }>;
+}
+
+/**
+ * Days of grazing for each group where it is now and in each other paddock on
+ * its own, across past seasons from today's soil water: the median and the
+ * 20th percentile (a drier run), up to `cap` days. Stock elsewhere stays put.
+ */
+export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number): PlanProjection | null {
+  const ctx = projectionSetup();
+  if (!ctx) return null;
+  const { inp, params, scen } = ctx;
+  const byId = new Map(inp.paddocks.map((p) => [p.id, p]));
+  const today = new Map<number, Float64Array>();
+  for (const p of inp.paddocks) { const s0 = stateToday(ctx, p); if (s0) today.set(p.id, s0); }
+  const mult = (p: Paddock) => ctx.fit?.multipliers.get(p.id) ?? 1;
+  const total = (st: Float64Array) => st[0]! + st[1]!;
+
+  /** Days until the paddocks' area-weighted pasture falls below R with this AE spread over them. */
+  const daysFor = (ids: number[], ae: number): { low: number; median: number } | null => {
+    const ps = ids.map((id) => byId.get(id)).filter((p): p is Paddock => !!p && today.has(p.id));
+    if (!ps.length) return null;
+    const area = ps.reduce((t, p) => t + p.area, 0);
+    const perHa = ae / area;
+    const nYears = scen.get(ps[0]!.cell)!.length;
+    const days: number[] = [];
+    for (let y = 0; y < nYears; y++) {
+      const st = ps.map((p) => Float64Array.from(today.get(p.id)!));
+      let d = 0;
+      for (; d < cap; d++) {
+        const avg = ps.reduce((t, p, i) => t + total(st[i]!) * p.area, 0) / area;
+        if (avg < R) break;
+        ps.forEach((p, i) => { const dr = scen.get(p.cell)![y]!; step(st[i]!, params, mult(p), dr.D[d]!, dr.WI[d]!, dr.R[d]!, perHa); });
+      }
+      days.push(d);
+    }
+    return { low: Math.round(pct(days, 0.2)), median: Math.round(pct(days, 0.5)) };
+  };
+  const nowOf = (ids: number[]) => {
+    const ps = ids.map((id) => byId.get(id)).filter((p): p is Paddock => !!p && today.has(p.id));
+    if (!ps.length) return null;
+    const area = ps.reduce((t, p) => t + p.area, 0);
+    return Math.round(ps.reduce((t, p) => t + total(today.get(p.id)!) * p.area, 0) / area);
+  };
+
+  const current: PlanProjection["current"] = {};
+  const options: PlanProjection["options"] = {};
+  for (const g of groups) {
+    current[g.key] = { now: nowOf(g.paddocks), days: daysFor(g.paddocks, g.ae_here) };
+    options[g.key] = [];
+    for (const p of inp.paddocks) {
+      if (g.paddocks.includes(p.id) || !today.has(p.id)) continue;
+      const now = Math.round(total(today.get(p.id)!));
+      if (now < R) continue;
+      const days = daysFor([p.id], g.ae);
+      if (days) options[g.key]!.push({ paddock_id: p.id, now, days });
+    }
+  }
+  return {
+    as_of: isoOf(inp.end), residual: R, current, options,
+    paddocks: inp.paddocks.map((p) => ({
+      id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1),
+      now: today.has(p.id) ? Math.round(total(today.get(p.id)!)) : null,
+      last_reading: p.obs.length ? isoOf(p.obs[p.obs.length - 1]!.day) : null,
+    })),
+  };
 }
