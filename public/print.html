@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Print map · Grazing</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/print.css">
+</head>
+<body>
+  <aside id="controls" class="no-print">
+    <h1>Print map</h1>
+    <p class="hint">For a contractor: click paddocks on the map to mark where the job is. Each click goes <b>Move from</b> → <b>Move to</b> → <b>Job here</b> → clear.</p>
+
+    <label>Title<input id="title" autocomplete="off"></label>
+    <label>Notes for the contractor<textarea id="notes" rows="4" placeholder="e.g. Move the Red Tag heifers from No.2 to Lighthouse. Gate between 3&amp;4 and No.2 stays open."></textarea></label>
+
+    <div class="row">
+      <label>Paper<select id="paper"><option value="A4">A4</option><option value="A3">A3</option></select></label>
+      <label>Layout<select id="orient"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+    </div>
+    <label>Background<select id="base"></select></label>
+
+    <fieldset>
+      <legend>Show</legend>
+      <label class="tick"><input type="checkbox" id="showOpen" checked> Paddocks open into each other</label>
+      <label class="tick"><input type="checkbox" id="showGates" checked> Gates (open and shut)</label>
+      <label class="tick"><input type="checkbox" id="showMobs" checked> Which mob is where</label>
+      <label class="tick"><input type="checkbox" id="showWater" checked> Water points</label>
+      <label class="tick"><input type="checkbox" id="showHa"> Paddock areas</label>
+      <label class="tick"><input type="checkbox" id="showTracks" checked> Tracks</label>
+    </fieldset>
+
+    <div class="btns">
+      <button id="fitAll">Whole property</button>
+      <button id="fitJob">Zoom to the job</button>
+    </div>
+    <button id="print" class="primary">Print…</button>
+    <p class="hint">Pan and zoom the map to frame it. In the print window, tick <b>Background graphics</b> (under More settings) for the imagery and colours, or choose <b>Save as PDF</b> to send it.</p>
+    <p id="status" class="hint"></p>
+  </aside>
+
+  <main id="sheet">
+    <header id="head">
+      <div><h2 id="titleOut"></h2><div id="sub"></div></div>
+      <svg id="north" viewBox="0 0 40 52" aria-label="North"><path d="M20 2 L32 38 L20 30 L8 38 Z" fill="#111"/><path d="M20 2 L20 30 L8 38 Z" fill="#fff" stroke="#111" stroke-width="1.5"/><text x="20" y="50" text-anchor="middle" font-size="12" font-weight="700" fill="#111">N</text></svg>
+    </header>
+    <div id="map"></div>
+    <footer id="foot">
+      <div id="legend"></div>
+      <div id="notesOut"></div>
+    </footer>
+  </main>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="/js/print.js"></script>
+</body>
+</html>

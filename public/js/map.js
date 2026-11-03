@@ -444,7 +444,7 @@ const SHARED_M = 20;
  * edge is cut into short pieces and a piece counts as shared when it runs
  * within SHARED_M of another member's boundary.
  */
-function outsideEdges(geometry, others) {
+export function outsideEdges(geometry, others) {
   const rings = (g) => (g.type === "Polygon" ? g.coordinates : g.type === "MultiPolygon" ? g.coordinates.flat() : []);
   const mine = rings(geometry);
   if (!mine.length) return [];

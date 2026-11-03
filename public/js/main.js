@@ -598,6 +598,10 @@ function toolsHtml() {
     <h3>Optiweigh</h3>
     <div id="owBox"><p class="muted small">Loading…</p></div>
 
+    <h3>Print a map</h3>
+    <p class="muted small">A map to hand to a contractor: open gates and the paddocks they join, which mob is where, and the job marked on it. A4 or A3, on paper or as a PDF.</p>
+    <div class="btns"><a class="btn" href="/print.html" target="_blank" rel="noopener">Print map…</a></div>
+
     <h3>Export</h3>
     <p class="muted small">The whole map, every field included. Keep a copy somewhere safe.</p>
     <div class="btns">
