@@ -119,12 +119,17 @@ export function searchAnimals(q: string, limit = 25): AnimalSummary[] {
   if (text.length < 2) return [];
   const digits = text.replace(/\D/g, "");
   const like = `%${text.replace(/[%_]/g, "")}%`;
+  // A visual tag is the PIC then the serial ("QBBH005912532"); the NLIS number
+  // has letters between them ("QBBH0059ZBW12532"), so match that shape too.
+  const vis = /^([A-Z]{4}\d{4})(\d{3,})$/i.exec(text.replace(/\s/g, ""));
+  const visLike = vis ? `${vis[1]}%${vis[2]}` : "";
   const rows = db.prepare(`
     SELECT * FROM animals
     WHERE tag LIKE ? COLLATE NOCASE OR nlis LIKE ? COLLATE NOCASE
        OR (? != '' AND eid LIKE ?)
+       OR (? != '' AND nlis LIKE ? COLLATE NOCASE)
     ORDER BY tag COLLATE NOCASE LIMIT ?
-  `).all(like, like, digits.length >= 3 ? digits : "", `%${digits}%`, limit) as AnimalRow[];
+  `).all(like, like, digits.length >= 3 ? digits : "", `%${digits}%`, visLike, visLike, limit) as AnimalRow[];
   return rows.map((a) => summary(a));
 }
 
