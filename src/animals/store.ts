@@ -139,14 +139,15 @@ export function searchAnimals(q: string, limit = 25): AnimalSummary[] {
  * are included when asked for — their history is kept.
  */
 export function listAnimals(opts: { q?: string; status?: string; mob?: number | null; limit?: number }): { total: number; animals: AnimalSummary[] } {
-  const rows = opts.q && opts.q.trim().length >= 2
-    ? searchAnimals(opts.q, 5000)
-    : allSummaries();
+  const searching = !!opts.q && opts.q.trim().length >= 2;
+  const rows = searching ? searchAnimals(opts.q!, 5000) : allSummaries();
   // "On hand" is alive and in a mob; "not in a mob" is alive with no mob here.
+  // Looking up a tag, "on hand" takes in those not yet in a mob too — an NLIS
+  // arrival not yet through the crush is still on the property.
   const status = opts.status && opts.status !== "all" ? opts.status : null;
   const fits = (a: AnimalSummary) =>
     status === null ? true
-      : status === "onhand" ? a.status === "alive" && a.mob_id !== null
+      : status === "onhand" ? a.status === "alive" && (a.mob_id !== null || searching)
         : status === "unplaced" ? a.status === "alive" && a.mob_id === null
           : a.status === status;
   const filtered = rows.filter((a) => fits(a) && (opts.mob == null || a.mob_id === opts.mob));
