@@ -26,6 +26,32 @@ const age = (birth) => {
 };
 const SEX = { female: "Female", male: "Bull / male", steer: "Steer", stag: "Stag" };
 
+/* ------------------------------ offline search ----------------------------- */
+
+/**
+ * The Animals tab's search, done on the phone from its copy of every animal
+ * (kept by Tools → Save herd for offline, and refreshed when the app opens
+ * with signal). Matches the server's search closely enough to find an animal
+ * by tag, NLIS number or any run of its EID digits.
+ */
+async function offlineAnimals(f) {
+  const all = (await get("/api/animals?status=all&limit=50000")).animals;
+  const q = (f.q || "").trim().toLowerCase();
+  const digits = q.replace(/\D/g, "");
+  const vis = /^([a-z]{4}\d{4})(\d{3,})$/i.exec(q.replace(/\s/g, ""));
+  const hit = (a) => !q
+    || (a.tag || "").toLowerCase().includes(q)
+    || (a.nlis || "").toLowerCase().includes(q)
+    || (digits.length >= 3 && (a.eid || "").includes(digits))
+    || (vis && (a.nlis || "").toLowerCase().startsWith(vis[1].toLowerCase()) && (a.nlis || "").endsWith(vis[2]));
+  const fits = (a) => f.status === "all" ? true
+    : f.status === "onhand" ? a.status === "alive" && (a.mob_id !== null || !!q)
+      : f.status === "unplaced" ? a.status === "alive" && a.mob_id === null
+        : a.status === f.status;
+  const found = all.filter((a) => hit(a) && fits(a) && (!f.mob || a.mob_id === Number(f.mob)));
+  return { total: found.length, animals: found.slice(0, 500) };
+}
+
 /* --------------------------------- page ------------------------------------ */
 
 export async function renderAnimal(ctx, id, root) {
@@ -148,7 +174,7 @@ export async function renderAnimal(ctx, id, root) {
     submit: async (d) => {
       const kg = Number($("#fKg", d).value);
       if (!kg) throw new Error("Enter the weight in kg");
-      const r = await send("POST", `/api/animals/${id}/weigh`, { weight_kg: kg, note: $("#fNote", d).value, ...readWhen(d, "f") });
+      const r = await send("POST", `/api/animals/${id}/weigh`, { weight_kg: kg, note: $("#fNote", d).value, ...readWhen(d, "f") }, { queue: `${label(a)}: ${kg} kg` });
       await done(`${label(a)}: ${nf1.format(kg)} kg`, r.batch);
     },
   }));
@@ -157,7 +183,7 @@ export async function renderAnimal(ctx, id, root) {
     fields: `<div class="f"><label for="fText">Note</label><textarea id="fText"></textarea></div>`,
     go: "Save note",
     submit: async (d) => {
-      const r = await send("POST", `/api/animals/${id}/note`, { text: $("#fText", d).value, ...readWhen(d, "f") });
+      const r = await send("POST", `/api/animals/${id}/note`, { text: $("#fText", d).value, ...readWhen(d, "f") }, { queue: `Note on ${label(a)}` });
       await done("Note saved", r.batch);
     },
   }));
@@ -202,7 +228,7 @@ export async function renderAnimal(ctx, id, root) {
         destination: $("#fTo", d).value, weight_kg: $("#fKg", d).value || null,
         price: $("#fPrice", d).value || null, price_unit: $("#fUnit", d).value, note: $("#fNote", d).value,
         also_mob: $("#fMob", d)?.checked ?? false, ...readWhen(d, "f"),
-      });
+      }, { queue: `Sale of ${label(a)}` });
       await done(`${label(a)} recorded as sold`, r.batch);
     },
   }));
@@ -215,7 +241,7 @@ export async function renderAnimal(ctx, id, root) {
     submit: async (d) => {
       const r = await send("POST", `/api/animals/${id}/death`, {
         cause: $("#fCause", d).value, also_mob: $("#fMob", d)?.checked ?? false, ...readWhen(d, "f"),
-      });
+      }, { queue: `Death of ${label(a)}` });
       await done(`${label(a)} recorded as dead`, r.batch);
     },
   }));
@@ -401,8 +427,9 @@ export async function renderAnimalsTab(ctx, el) {
     try {
       r = await get(`/api/animals?${params}`);
     } catch (e) {
-      list.innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`;
-      return;
+      // Out of signal: search the phone's copy of every animal instead.
+      r = await offlineAnimals(f).catch(() => null);
+      if (!r) { list.innerHTML = `<p class="muted small">${escapeHtml(e.message)}</p>`; return; }
     }
     if (mine !== seq) return; // a later keystroke has already asked again
     if (!r.total) {

@@ -37,6 +37,8 @@ animalApi.get("/animals", (req, res) => {
     q: typeof req.query["q"] === "string" ? req.query["q"] : "",
     status: typeof req.query["status"] === "string" ? req.query["status"] : "alive",
     mob: Number.isInteger(mob) ? mob : null,
+    // The phone's offline copy asks for every animal at once.
+    ...(req.query["limit"] ? { limit: Math.min(50_000, Math.max(1, Number(req.query["limit"]) || 500)) } : {}),
   }));
 });
 

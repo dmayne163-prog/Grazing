@@ -268,13 +268,13 @@ function bindForm(el, gauge, toast, done) {
     const mm = el.querySelector("#rMm").value;
     if (mm === "") { toast("Enter the rainfall in mm", { error: true }); return; }
     try {
-      await send("POST", "/api/rain", {
+      const r = await send("POST", "/api/rain", {
         gauge: el.querySelector("#rGauge").value,
         date: el.querySelector("#rDate").value,
         mm: Number(mm),
         note: el.querySelector("#rNote").value,
-      });
-      toast(`Saved ${mm} mm`);
+      }, { queue: `Rain: ${mm} mm, ${el.querySelector("#rGauge").value || "gauge"}, ${el.querySelector("#rDate").value}` });
+      toast(r.queued ? `${mm} mm saved on the phone — it sends when you're back in signal` : `Saved ${mm} mm`, r.queued ? { ms: 6000 } : undefined);
       done();
     } catch (e) {
       toast(e.message, { error: true });

@@ -112,7 +112,7 @@ export async function openRegister(ctx) {
         const text = prompt(`A note on ${x.what.toLowerCase()} of ${Math.abs(x.change)} hd, ${x.mob}, ${day(x.date)}.\nNotes are kept with your name and the time and can't be changed afterwards.`);
         if (!text || !text.trim()) return;
         try {
-          await send("POST", `/api/mob-events/${x.id}/notes`, { text });
+          await send("POST", `/api/mob-events/${x.id}/notes`, { text }, { queue: "Note in the head count register" });
           ctx.toast("Note added");
           load();
         } catch (e) {

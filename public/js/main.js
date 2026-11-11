@@ -12,6 +12,8 @@ import { openRegister } from "./register.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
 import { openPlan } from "./plan.js";
+import { loadNotes, notesSectionHtml } from "./notes.js";
+import { flush as sendWaiting, list as outboxList, onChange as onOutboxChange, remove as dropWaiting, startSending, syncState } from "./outbox.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
 import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
@@ -112,9 +114,42 @@ async function loadStock() {
     state.grazing = new Map(grazing.paddocks.map((g) => [g.paddock_id, g]));
     state.recordsBegin = grazing.records_begin;
     state.gates = gates;
+    await showWaiting();
     drawStock();
   } catch {
     // The map is still worth showing without the stock on it.
+  }
+}
+
+/**
+ * Changes still waiting on the phone, shown as if made: a mob moved out of
+ * signal shows in its new paddock, with its head after deaths or a recount,
+ * and a gate opened or shut shows that way — each marked as not sent yet.
+ */
+async function showWaiting() {
+  const waiting = (await outboxList()).filter((i) => i.status === "waiting" && i.method === "POST");
+  for (const w of waiting) {
+    const b = w.body || {};
+    let mt;
+    if (w.path === "/api/actions/move") {
+      for (const id of b.mob_ids || []) {
+        const mob = state.mobs.find((x) => x.id === Number(id));
+        if (!mob) continue;
+        mob.paddock_ids = (b.to || []).map(Number);
+        mob.paddocks = mob.paddock_ids.map((pid) => ({ id: pid, name: state.byId.get(pid)?.properties.name ?? `#${pid}` }));
+        mob.in_paddock_since = b.date || mob.in_paddock_since;
+        mob.waiting = true;
+      }
+    } else if ((mt = /^\/api\/mobs\/(\d+)\/(deaths|recount|draft)$/.exec(w.path))) {
+      const mob = state.mobs.find((x) => x.id === Number(mt[1]));
+      if (!mob) continue;
+      const n = Number(b.head) || 0;
+      mob.head = mt[2] === "recount" ? n : Math.max(0, mob.head - n);
+      mob.waiting = true;
+    } else if ((mt = /^\/api\/gates\/(\d+)$/.exec(w.path))) {
+      const g = state.gates.find((x) => x.id === Number(mt[1]));
+      if (g) { g.state = b.state; g.waiting = true; }
+    }
   }
 }
 
@@ -625,6 +660,11 @@ function toolsHtml() {
       <div class="btns"><button class="btn" id="offlineBtn">Save map for offline</button></div>
     ` : ""}
 
+    <h3>Offline herd and records</h3>
+    <p class="muted small">The app keeps a copy of the mobs, gates, rain and notes on this phone by itself whenever it's opened with signal. This also saves every animal's own page, so animals can be looked up and recorded out of signal. A few thousand small downloads: best on Wi-Fi.</p>
+    <div id="herdStatus"><p class="muted small">${localGet("offlineCopyAt") ? `Copy last kept ${when(Number(localGet("offlineCopyAt")))}.` : "No copy kept yet."}</p></div>
+    <div class="btns"><button class="btn" id="herdBtn">Save herd for offline</button></div>
+
     <h3>Users and passwords</h3>
     <p class="muted small">${canEdit() ? "Add people who can use the app (view only or administrator), reset passwords, and change your own." : "Change your password."}</p>
     <div class="btns"><button class="btn" id="openUsers">${canEdit() ? "Users and passwords…" : "Change my password…"}</button></div>
@@ -709,6 +749,23 @@ function bindOverview() {
   const off = $("#offlineBtn", body);
   if (off) off.onclick = () => runOffline();
   if (state.offlineRun) showOfflineProgress();
+  const herd = $("#herdBtn", body);
+  if (herd) herd.onclick = async () => {
+    herd.disabled = true;
+    const st = $("#herdStatus");
+    try {
+      await keepOfflineCopy(true, (done, total) => {
+        const el = $("#herdStatus");
+        if (el) el.innerHTML = `<p class="muted small">Saving… ${done.toLocaleString()} of ${total.toLocaleString()}</p>`;
+      });
+      toast("Herd and records saved to this phone for offline");
+    } catch (e) {
+      toast(e.message, { error: true });
+    }
+    herd.disabled = false;
+    const el = $("#herdStatus") || st;
+    if (el) el.innerHTML = `<p class="muted small">Copy last kept ${when(Date.now())}.</p>`;
+  };
 
   const bk = $("#backups", body);
   if (bk) get("/api/backups").then((list) => {
@@ -770,6 +827,117 @@ async function restore(id) {
   } catch (e) {
     toast(e.message, { error: true });
   }
+}
+
+/* outbox: changes made out of signal */
+
+function showOutboxButton(items) {
+  const btn = $("#outboxBtn");
+  if (!btn) return;
+  const waiting = items.filter((i) => i.status === "waiting").length;
+  const failed = items.filter((i) => i.status === "failed").length;
+  const st = syncState();
+  btn.hidden = !waiting && !failed;
+  btn.classList.toggle("bad", failed > 0 || st === "signin");
+  btn.textContent = st === "signin" && waiting ? `Sign in to send ${waiting}`
+    : st === "sending" ? `Sending ${waiting}…`
+    : [waiting ? `${waiting} waiting to send` : "", failed ? `${failed} not sent` : ""].filter(Boolean).join(" · ");
+}
+
+async function openOutbox() {
+  const d = $("#dialog");
+  const items = await outboxList();
+  const st = syncState();
+  d.innerHTML = `
+    <div class="dlg narrow">
+      <header><h2>Changes on this phone</h2></header>
+      <div class="body">
+        <p class="muted small">${st === "signin"
+          ? "The sign-in has lapsed, so these can't be sent yet. Press <b>Sign in again</b>; nothing here is lost."
+          : st === "offline" || !navigator.onLine
+            ? "No signal at the moment. These send by themselves once the phone is back in range and the app is open."
+            : "These are sent in the order they were made, with the time they were made."}</p>
+        ${items.length ? `<ul class="outbox">${items.map((i) => `
+          <li class="${i.status}">
+            <div class="grow">${escapeHtml(i.label)}
+              <div class="muted tiny">Made ${when(i.created)}${i.status === "failed" ? ` · <b>Not sent: ${escapeHtml(i.error || "")}</b>` : ""}</div></div>
+            ${i.status === "failed" ? `<button class="linkbtn" data-drop="${i.id}">Discard</button>` : ""}
+          </li>`).join("")}</ul>` : '<p class="muted small">Nothing waiting.</p>'}
+        ${items.some((i) => i.status === "failed") ? '<p class="muted small">A change the server turned down (say the mob had already been merged) is kept here so you can see what it was. Make it again the right way, then discard it.</p>' : ""}
+      </div>
+      <footer>
+        <button class="btn" id="obClose">Close</button>
+        ${st === "signin" ? '<button class="btn primary" id="obSignIn">Sign in again</button>' : '<button class="btn primary" id="obSend">Send now</button>'}
+      </footer>
+    </div>`;
+  $("#obClose", d).onclick = () => d.close();
+  const sendBtn = $("#obSend", d);
+  if (sendBtn) sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    await sendWaiting();
+    openOutbox();
+  };
+  const signIn = $("#obSignIn", d);
+  // A full page load goes through Cloudflare's sign-in and back; the waiting
+  // changes are kept on the phone and go once it's done.
+  if (signIn) signIn.onclick = () => { location.href = "/"; };
+  d.querySelectorAll("[data-drop]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Discard this change? It won't be sent.")) return;
+      await dropWaiting(b.dataset.drop);
+      openOutbox();
+    };
+  });
+  if (!d.open) d.showModal();
+}
+
+/**
+ * Fetches what the app needs out of signal so the service worker keeps a copy:
+ * mobs, gates, rain, notes, every animal's summary, each mob's history and
+ * animals, each paddock's grazing. With `animals`, every animal still on hand
+ * gets its own page kept too (a few thousand small requests: best on Wi-Fi).
+ * Without it, it runs at most every six hours, quietly, when the app opens.
+ */
+async function keepOfflineCopy(animals, onProgress = () => {}) {
+  if (!offlineSupported()) throw new Error("Offline copies only work through the app's https:// address");
+  if (!animals) {
+    const last = Number(localGet("offlineCopyAt") || 0);
+    if (Date.now() - last < 6 * 3_600_000) return 0;
+  }
+  const paddocks = state.features.filter((f) => f.properties.kind === "paddock");
+  const urls = [
+    "/api/meta", "/api/features", "/api/mobs", "/api/stock", "/api/grazing", "/api/gates", "/api/pasture/latest",
+    "/api/rain", "/api/notes", "/api/animals?status=all&limit=50000", "/api/animals/unplaced",
+    ...state.mobs.flatMap((m) => [`/api/mobs/${m.id}/events`, `/api/mobs/${m.id}/animals`]),
+    ...paddocks.map((f) => `/api/paddocks/${f.id}/grazing`),
+  ];
+  let all = null;
+  const run = async (list, base, total) => {
+    let next = 0, done = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const u = list[next++];
+        try {
+          const r = await fetch(u, { headers: { Accept: "application/json" } });
+          if (u.startsWith("/api/animals?status=all")) all = await r.json();
+          else if (u === "/api/notes") {
+            const notes = await r.json();
+            // Photos on notes too, so they show out of signal.
+            for (const n of notes) if (n.photo) await fetch(n.photo).catch(() => {});
+          } else await r.arrayBuffer();
+        } catch { /* skipped; the rest still help */ }
+        onProgress(base + ++done, total);
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  };
+  await run(urls, 0, urls.length);
+  if (animals && all?.animals) {
+    const pages = all.animals.filter((a) => a.status === "alive").map((a) => `/api/animals/${a.id}`);
+    await run(pages, urls.length, urls.length + pages.length);
+  }
+  localSet("offlineCopyAt", String(Date.now()));
+  return urls.length;
 }
 
 /* offline map */
@@ -928,6 +1096,7 @@ function featureHtml(f) {
       <div class="row2"><div class="f"><label for="whoDate">On</label><input type="date" id="whoDate" value="${todayIso()}"></div><div></div></div>
       <div id="whoHere"><p class="muted small">Loading…</p></div>` : ""}
     ${readOnly}
+    ${notesSectionHtml(canEdit())}
     ${canEdit() ? `
       <h3>Details</h3>
       ${detailFormHtml(p.kind, p.name, p.subtype, props, cls)}
@@ -952,6 +1121,7 @@ function bindFeature(f) {
   const pp = $("#paddockPasture");
   if (pp) renderPaddockPasture(pp, f.id, grazable(f) || f.properties.area_ha || 0, () => state.selectedId === f.id);
   if (isGate(f)) loadGatePanel(ctx, f, body);
+  loadNotes(ctx, "feature", f.id, body, f.properties.name || kindLabel(f.properties.kind));
   loadHistory(f.id);
   if (!canEdit()) return;
 
@@ -1218,10 +1388,35 @@ async function start() {
     try { await send("POST", "/api/auth/logout"); } finally { location.href = "/"; }
   };
 
-  const net = () => { $("#netStatus").hidden = navigator.onLine; };
-  window.addEventListener("online", () => { net(); loadFeatures().then(render).catch(() => {}); });
+  const net = () => {
+    const el = $("#netStatus");
+    if (navigator.onLine && !state.offlineCopyAt) { el.hidden = true; return; }
+    el.hidden = false;
+    el.textContent = state.offlineCopyAt ? `Offline — showing the copy from ${when(state.offlineCopyAt)}` : "Offline — showing saved copy";
+  };
+  window.addEventListener("online", () => { state.offlineCopyAt = null; net(); loadFeatures().then(render).catch(() => {}); });
   window.addEventListener("offline", net);
+  // A read answered from the phone's copy says when that copy was kept.
+  window.addEventListener("offline-copy", (e) => {
+    if (!state.offlineCopyAt || e.detail.at < state.offlineCopyAt) state.offlineCopyAt = e.detail.at;
+    net();
+  });
+  // …and a fresh answer from the server means it's back.
+  window.addEventListener("fresh-data", () => { if (state.offlineCopyAt) { state.offlineCopyAt = null; net(); } });
   net();
+
+  // Changes made out of signal: the header shows how many are waiting, and
+  // once they've gone the screen is brought up to date.
+  onOutboxChange(showOutboxButton);
+  $("#outboxBtn").onclick = openOutbox;
+  window.addEventListener("outbox-sent", async (e) => {
+    state.offlineCopyAt = null; net();
+    await ctx.refresh();
+    toast(`${e.detail.sent} change${e.detail.sent === 1 ? "" : "s"} made out of signal ${e.detail.sent === 1 ? "has" : "have"} been sent`);
+  });
+  startSending();
+  // Keep the phone's copy of the herd fresh while there's signal.
+  if (navigator.onLine) setTimeout(() => keepOfflineCopy(false).catch(() => {}), 8000);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* offline is a bonus, not a requirement */ });

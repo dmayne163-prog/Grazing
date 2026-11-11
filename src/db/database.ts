@@ -411,6 +411,36 @@ CREATE TABLE IF NOT EXISTS pasture_obs (
   UNIQUE (feature_id, date, source)
 );
 
+-- Changes made on a phone out of signal and sent later. Each carries an id
+-- made on the phone; the answer is kept, so if the signal drops after the
+-- server saved a change but before the phone heard back, sending it again
+-- returns the same answer rather than saving it twice.
+CREATE TABLE IF NOT EXISTS offline_requests (
+  id         TEXT    PRIMARY KEY,
+  method     TEXT    NOT NULL,
+  path       TEXT    NOT NULL,
+  status     INTEGER NOT NULL,
+  response   TEXT,
+  username   TEXT,
+  created_at INTEGER NOT NULL
+);
+
+-- Notes from the paddock: on a paddock, water point or anything else on the
+-- map, or on a mob; with a photo if one was taken (kept in DATA_DIR/photos).
+CREATE TABLE IF NOT EXISTS field_notes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  target      TEXT    NOT NULL,         -- 'feature' or 'mob'
+  target_id   INTEGER NOT NULL,
+  date        TEXT    NOT NULL,
+  time        TEXT,
+  text        TEXT    NOT NULL DEFAULT '',
+  photo       TEXT,                     -- file name in DATA_DIR/photos
+  username    TEXT,
+  created_at  INTEGER NOT NULL,
+  deleted_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_field_notes_target ON field_notes(target, target_id);
+
 -- Optiweigh's sessions: each a deployment of a walk-over unit with one mob.
 -- A session is assigned to the mob it's with, so its animals and weights
 -- follow that mob; or kept as a record only, the weights on each animal and

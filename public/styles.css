@@ -94,6 +94,9 @@ button{cursor:pointer}
 @media (max-width:640px){
   .top h1{display:none}
   .whoami span{display:none}
+  /* Offline and waiting-to-send go on a line of their own under the search. */
+  .top{flex-wrap:wrap;height:auto;min-height:var(--top-h);row-gap:6px;padding-top:8px;padding-bottom:8px}
+  .top .status{order:3;white-space:normal;flex:1 1 auto;text-align:center}
 }
 
 /* ---------------------------------- stage ---------------------------------- */
@@ -609,3 +612,18 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 /* Rotation planner */
 .planmob { border-top: 1px solid var(--line, #2a3236); padding-top: 6px; margin-top: 10px; }
 .planmob tr.chosen td { background: rgba(95, 190, 142, 0.12); }
+
+/* Offline: the outbox button in the header, the outbox list, and notes. */
+.outboxbtn{border:0;cursor:pointer;font:inherit;font-size:12px}
+.outboxbtn.bad{color:var(--crit);background:var(--crit-bg, rgba(224,90,90,.13))}
+.outbox{list-style:none;padding:0;margin:0}
+.outbox li{padding:8px 0;border-bottom:1px solid var(--line-soft);display:flex;gap:10px;align-items:flex-start}
+.outbox li .grow{flex:1}
+.outbox li.failed .grow b{color:var(--crit)}
+.chip.pending{color:var(--warn);background:var(--warn-bg)}
+.notes{list-style:none;padding:0;margin:0}
+.note-item{padding:8px 0;border-bottom:1px solid var(--line-soft)}
+.note-item p{margin:3px 0;white-space:pre-wrap}
+.note-item.pending{opacity:.85}
+.note-item .linkbtn{margin-left:8px;font-size:12px}
+.note-photo{display:block;max-width:100%;max-height:260px;border-radius:8px;margin-top:6px}

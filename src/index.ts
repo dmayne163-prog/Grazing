@@ -14,6 +14,8 @@ import { startClimateSync } from "./climate/silo.js";
 import { startOptiweighSync } from "./animals/optiweigh-sync.js";
 import { startAutoGauge } from "./rain/autogauge.js";
 import { reconcileAllMobWeights } from "./animals/store.js";
+import { offlineOnce, pruneOfflineRequests } from "./http/offline-once.js";
+import { notesApi } from "./api/notes-routes.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -61,6 +63,8 @@ app.use(blockCrossSite);
 app.use(attachUser);
 
 app.use("/api", noStore);
+// A change sent twice from a phone's offline queue is only made once.
+app.use("/api", offlineOnce);
 // For the container healthcheck. Says nothing about the farm.
 app.get("/api/health", (_req, res) => { res.json({ ok: true }); });
 app.use("/api/auth", auth);
@@ -70,6 +74,7 @@ app.use("/api", animalApi);
 app.use("/api", climateApi);
 app.use("/api", pastureApi);
 app.use("/api", mapApi);
+app.use("/api", notesApi);
 
 app.use("/tiles", requireAuth, tiles);
 
@@ -125,6 +130,7 @@ const housekeeping = setInterval(() => {
   const gone = deleteExpiredSessions();
   if (gone > 0) log.info(`removed ${gone} expired session(s)`);
   checkpointWal();
+  pruneOfflineRequests();
 }, 6 * 3_600_000);
 
 server.listen(config.port, () => {

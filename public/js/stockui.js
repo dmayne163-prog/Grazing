@@ -7,6 +7,7 @@
  * `ctx` is supplied by main.js: { state, toast, refresh, select, selectMob, canEdit, dialog }.
  */
 import { get, send } from "./api.js";
+import { loadNotes, notesSectionHtml } from "./notes.js";
 import { escapeHtml } from "./map.js";
 
 const $ = (sel, root) => root.querySelector(sel);
@@ -66,7 +67,14 @@ export function readWhen(root, prefix) {
 
 /* -------------------------------- undo toast ------------------------------- */
 
+/** What send() gives as the batch of a change kept on the phone to send later. */
+export const QUEUED = "queued";
+
 export function undoable(ctx, message, batch) {
+  if (batch === QUEUED) {
+    ctx.toast(`${message} — saved on the phone; it sends when you're back in signal`, { ms: 6000 });
+    return;
+  }
   ctx.toast(message, batch ? {
     action: {
       label: "Undo",
@@ -310,13 +318,14 @@ export function openMoveDialog(ctx, m, dest) {
           sex: $("#mvSex", dialog)?.value || undefined,
           weight_kg: $("#mvKg", dialog).value || null,
           ...(matched ? { animals: $("#mvWhich", dialog).value } : { note: $("#mvWhich", dialog).value }),
-        });
+        }, { queue: `Draft ${head} hd off ${m.name} to ${toName}` });
         dialog.close();
         await ctx.refresh();
         undoable(ctx, `${head} hd drafted off to ${toName}${r.animals ? ` (${r.animals} animal records moved)` : ""}`, r.batch);
       } else {
         const ids = [m.id, ...[...dialog.querySelectorAll("#mvOthers input:checked")].map((c) => Number(c.value))];
-        const r = await send("POST", "/api/actions/move", { mob_ids: ids, to: [to], ...when, note: $("#mvNote", dialog).value });
+        const r = await send("POST", "/api/actions/move", { mob_ids: ids, to: [to], ...when, note: $("#mvNote", dialog).value },
+          { queue: `Move ${ids.length > 1 ? `${ids.length} mobs` : m.name} to ${toName}` });
         dialog.close();
         await ctx.refresh();
         undoable(ctx, ids.length > 1 ? `${ids.length} mobs moved to ${toName}` : `${m.name} moved to ${toName}`, r.batch);
@@ -409,7 +418,7 @@ export function openWeighDialog(ctx, m) {
         adg_kg: $("#wAdg", dialog).value === "" ? null : Number($("#wAdg", dialog).value),
         note: $("#wNote", dialog).value,
         ...readWhen(dialog, "w"),
-      });
+      }, { queue: `Weight for ${m.name}` });
       dialog.close();
       await ctx.refresh();
       undoable(ctx, `${m.name}: ${nf0.format(weight)} kg recorded`, r.batch);
@@ -446,7 +455,8 @@ function headDialog(ctx, m, { title, field, value, go, path, hint, done }) {
       const n = $("#hN", d).value;
       if (n === "") throw new Error(`Enter ${field.toLowerCase()}`);
       btn.disabled = true;
-      const r = await send("POST", `/api/mobs/${m.id}/${path}`, { head: Number(n), note: $("#hNote", d).value, ...readWhen(d, "h") });
+      const r = await send("POST", `/api/mobs/${m.id}/${path}`, { head: Number(n), note: $("#hNote", d).value, ...readWhen(d, "h") },
+        { queue: `${path === "deaths" ? `${n} death(s) in` : `Recount of`} ${m.name}${path === "deaths" ? "" : `: ${n} hd`}` });
       d.close();
       await ctx.refresh();
       undoable(ctx, done(n), r.batch);
@@ -510,7 +520,8 @@ function mergeDialog(ctx, m) {
     if (!into) return;
     try {
       btn.disabled = true;
-      const r = await send("POST", `/api/mobs/${m.id}/merge`, { into: into.id, note: $("#mgNote", d).value, ...readWhen(d, "mg") });
+      const r = await send("POST", `/api/mobs/${m.id}/merge`, { into: into.id, note: $("#mgNote", d).value, ...readWhen(d, "mg") },
+        { queue: `Merge ${m.name} into ${into.name}` });
       d.close();
       ctx.selectMob(into.id);
       await ctx.refresh();
@@ -547,7 +558,7 @@ export function mobPageHtml(ctx, m) {
     <p class="sub">${escapeHtml(m.species)}${m.owner ? ` · <span class="chip owner">${escapeHtml(m.owner)}</span> agistment` : ""}</p>
 
     <div class="statuscard">
-      <div class="big"><b>${m.head} hd</b> · ${where || "not in a paddock"}</div>
+      <div class="big"><b>${m.head} hd</b> · ${where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
       <div class="muted small">${m.in_paddock_since ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
       ${ctx.canEdit ? `<div class="btns">
         <button class="btn primary" id="mMove">Move…</button>
@@ -562,6 +573,8 @@ export function mobPageHtml(ctx, m) {
 
     <h3>Animals</h3>
     <div id="mobAnimals"><p class="muted small">Loading…</p></div>
+
+    ${notesSectionHtml(ctx.canEdit)}
 
     <h3>History</h3>
     <ul class="history" id="mobEvents"><li class="muted">Loading…</li></ul>
@@ -588,6 +601,7 @@ export function mobPageHtml(ctx, m) {
 
 export function bindMobPage(ctx, m, root) {
   $("#back", root).onclick = ctx.backToMobs;
+  loadNotes(ctx, "mob", m.id, root, m.name);
   root.querySelectorAll("[data-paddock]").forEach((el) => {
     el.onclick = () => ctx.select(Number(el.dataset.paddock), { zoom: true });
   });
@@ -824,7 +838,9 @@ export async function loadGatePanel(ctx, f, root) {
         s.onchange = () => { sides[s.dataset.side] = Number(s.value); };
       });
     } catch (e) {
-      box.innerHTML = `<p class="bad">${escapeHtml(e.message)}</p>`;
+      box.innerHTML = e.status === 0
+        ? `<p class="muted small">No signal, so the mobs either side can't be checked now. It's saved on the phone and worked out when it sends${next === "closed" ? "; a mob with both paddocks stays on the side it was first put in" : ""}.</p>`
+        : `<p class="bad">${escapeHtml(e.message)}</p>`;
     }
   };
   bindWhen(el, "g", preview);
@@ -836,9 +852,9 @@ export async function loadGatePanel(ctx, f, root) {
       btn.disabled = true;
       const r = await send("POST", `/api/gates/${f.id}`, {
         state: next, ...readWhen(el, "g"), sides, note: $("#gNote", el).value,
-      });
+      }, { queue: `${next === "open" ? "Open" : "Close"} ${f.properties.name || "gate"}` });
       await ctx.refresh();
-      undoable(ctx, `${f.properties.name || "Gate"} ${next === "open" ? "opened" : "closed"}${r.changes.length ? ` · ${r.changes.length} ${plural(r.changes.length, "mob", "mobs")} affected` : ""}`, r.batch);
+      undoable(ctx, `${f.properties.name || "Gate"} ${next === "open" ? "opened" : "closed"}${r.changes?.length ? ` · ${r.changes.length} ${plural(r.changes.length, "mob", "mobs")} affected` : ""}`, r.batch);
     } catch (e) {
       btn.disabled = false;
       ctx.toast(e.message, { error: true });
