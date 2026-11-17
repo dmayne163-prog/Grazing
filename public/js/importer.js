@@ -41,11 +41,12 @@ const PICKERS = {
       Every animal's daily weights come in by EID; the download is cumulative, so importing a newer one just adds what's new.`,
   },
   pasture: {
-    title: "Import a Cibo Labs pasture report",
+    title: "Import a pasture report",
     accept: ".zip,.csv",
     help: `A download from Cibo Labs, as the .zip they send: PastureKey's paddock readings (PaddocksTsdmTimeSeries…zip),
-      or the farm's Pasture Biomass report (pasturebiomass_….zip).<br>
-      Importing a newer download later just adds what's new.`,
+      or the farm's Pasture Biomass report (pasturebiomass_….zip). Importing a newer download later just adds what's new.<br>
+      Or a FORAGE data file from the Long Paddock: the Rainfall and Pasture file (dataInGraphs_Forage…csv) or the
+      Ground Cover file (ForageGroundCoverReport_coverData_…csv). A newer one replaces the last.`,
   },
   map: {
     title: "Import a map",
@@ -127,7 +128,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
     dialog.querySelector(".body").innerHTML = `<p>Reading <b>${escapeHtml(file.name)}</b>…</p>`;
     try {
       // Cibo Labs names its downloads pasturebiomass_<farm>_<time>.zip.
-      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_|^PaddocksTsdmTimeSeries/i.test(file.name)) {
+      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_|^PaddocksTsdmTimeSeries|forage.*\.csv$/i.test(file.name)) {
         showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
         return;
       }
@@ -587,7 +588,46 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
 
   /* ------------------------- step 2: pasture report ------------------------- */
 
+  function showForageReview(filename, p) {
+    const fmt = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "");
+    const ym = (m) => (m ? new Date(`${m}-01T00:00:00`).toLocaleDateString("en-AU", { month: "short", year: "numeric" }) : "");
+    const what = p.forage === "cover"
+      ? `Satellite ground cover for the property, season by season: <b>${p.seasons}</b> seasons from ${ym(p.from)} to ${ym(p.to)}.`
+      : `Rainfall and modelled pasture growth for the property: <b>${p.years}</b> years (April to March) from ${p.from} to ${p.to}, and ${p.months} months of standing feed and ground cover.`;
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review FORAGE report</h2>
+          <div class="muted small">${escapeHtml(filename)}${p.report_date ? ` · made ${fmt(p.report_date)}` : ""}</div>
+        </header>
+        <div class="body">
+          <p>${what}</p>
+          ${p.replaces ? `<p class="small">This replaces the FORAGE ${p.forage === "cover" ? "ground cover" : "rainfall and pasture"} figures imported before${/^\d{4}-/.test(p.replaces) ? ` (made ${fmt(p.replaces)})` : ""}.</p>` : ""}
+          <p class="muted small gap-top">Whole-property figures from the Queensland Government's Long Paddock. FORAGE models pasture with an assumed stocking rate, so it shows how this year compares with the last 50, not the feed in a paddock: that's what Cibo's readings are for. They show on the Pasture tab under <b>Long-term</b>.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      try {
+        await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
+        dialog.close();
+        onDone(`Imported FORAGE ${p.forage === "cover" ? "ground cover" : "rainfall and pasture"} figures`);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
   function showPastureReview(filename, p) {
+    if (p.kind === "forage") { showForageReview(filename, p); return; }
     if (p.kind === "pasturekey") { showPastureKeyReview(filename, p); return; }
     const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
     const kg = (v) => (v === null || v === undefined ? "—" : `${Math.round(v).toLocaleString("en-AU")} kg/ha`);

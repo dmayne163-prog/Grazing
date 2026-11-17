@@ -28,7 +28,7 @@ export async function renderPasture(el, ctx) {
     return;
   }
   const importBtn = ctx.canEdit
-    ? '<div class="btns gap-top"><button class="btn" data-import="pasture">Import a Cibo Labs download…</button></div>'
+    ? '<div class="btns gap-top"><button class="btn" data-import="pasture">Import a Cibo Labs or FORAGE download…</button></div>'
     : "";
   const bind = () => {
     el.querySelectorAll("[data-import]").forEach((b) => { b.onclick = () => ctx.startImport(b.dataset.import); });
@@ -40,15 +40,166 @@ export async function renderPasture(el, ctx) {
   const farm = data.farm;
   const paddocks = data.paddocks || [];
   if (!farm.length && !paddocks.length) {
-    el.innerHTML = `<p class="muted small">No pasture readings yet. Import PastureKey's paddock readings, or Cibo Labs' Pasture Biomass report, as the .zip Cibo sends.</p>${importBtn}`;
+    el.innerHTML = `<p class="muted small">No pasture readings yet. Import PastureKey's paddock readings, or Cibo Labs' Pasture Biomass report, as the .zip Cibo sends.</p><div id="longTerm"></div>${importBtn}`;
     bind();
+    loadLongTerm(el.querySelector("#longTerm"));
     return;
   }
 
-  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}${importBtn}`;
+  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}<div id="longTerm"></div>${importBtn}`;
   bind();
   if (farm.length) drawPasture(el.querySelector("#pastureChart"), farm);
   loadOutlook(el.querySelector("#outlook"), ctx);
+  loadLongTerm(el.querySelector("#longTerm"));
+}
+
+/* -------------------------------- long-term -------------------------------- */
+
+/**
+ * FORAGE's long view of the property: 50 years of pasture growth and rain,
+ * and satellite ground cover since 1987, with where this year and season sit.
+ * Whole-property, modelled with an assumed stocking rate: context, not feed.
+ */
+async function loadLongTerm(host) {
+  if (!host) return;
+  let f;
+  try { f = await get("/api/pasture/forage"); } catch { return; }
+  if (!f) {
+    host.innerHTML = `<h3>Long-term · FORAGE</h3><p class="muted small">Import FORAGE's data files from the Long Paddock (Rainfall and Pasture, and Ground Cover) to see how this year compares with the last 50.</p>`;
+    return;
+  }
+  const pct = (p) => (p === null || p === undefined ? "" : ` <span class="muted">(${p}${p % 10 === 1 && p !== 11 ? "st" : p % 10 === 2 && p !== 12 ? "nd" : p % 10 === 3 && p !== 13 ? "rd" : "th"} percentile)</span>`);
+  const word = (p) => (p === null || p === undefined ? "" : p <= 10 ? "very low" : p <= 30 ? "low" : p < 70 ? "about average" : p < 90 ? "high" : "very high");
+  const nf = (v) => (v === null || v === undefined ? "—" : Math.round(v).toLocaleString("en-AU"));
+  const y = f.years?.last_full;
+  const m = f.latest_month;
+  const s = f.latest_season;
+  const facts = [];
+  if (y) {
+    facts.push([`Pasture grown, Apr ${y.year} – Mar ${y.year + 1}`, `${nf(y.growth)} kg/ha${pct(y.growth_pct)} · ${word(y.growth_pct)}`]);
+    facts.push([`Rain, Apr ${y.year} – Mar ${y.year + 1}`, `${nf(y.rain)} mm${pct(y.rain_pct)}`]);
+  }
+  if (m) facts.push([`Standing feed, ${fmtMonth(`${m.month}-01`)}`, `${nf(m.tsdm)} kg/ha modelled${pct(m.tsdm_pct)} for the month`]);
+  if (s) facts.push([`Ground cover, ${fmtMonth(`${s.from}-01`)} – ${fmtMonth(`${s.to}-01`)}`, `${nf(s.total)}% from satellite${pct(s.total_pct)} for the season · lowest on record ${nf(s.lowest)}%`]);
+  const made = f.pasture?.report_date || f.cover?.report_date;
+  host.innerHTML = `
+    <h3>Long-term · FORAGE</h3>
+    <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${f.years ? `<p class="muted small">Pasture grown each year, April to March (FORAGE's model). The line is the median year.</p><div class="rainchart" id="forageGrowth"></div>` : ""}
+    ${f.cover ? `<p class="muted small gap-top">Ground cover from satellite, each season: total, and the green part of it.</p><div class="rainchart" id="forageCover"></div>` : ""}
+    <p class="muted tiny gap-top">Whole-property figures from the Queensland Government's FORAGE reports${made ? `, made ${fmtDay(made)}` : ""}. Pasture is modelled with an assumed stocking rate: it shows how a year compares, not the feed in a paddock.</p>`;
+  if (f.years) drawGrowth(host.querySelector("#forageGrowth"), f.years.list, f.years.partial);
+  if (f.cover) drawCover(host.querySelector("#forageCover"), f.cover.seasons);
+}
+
+function svgFrame(host, W, H, label) {
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", label);
+  const add = (tag, attrs) => {
+    const n = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    svg.appendChild(n);
+    return n;
+  };
+  host.innerHTML = "";
+  host.appendChild(svg);
+  const tip = document.createElement("div");
+  tip.className = "charttip";
+  tip.hidden = true;
+  host.appendChild(tip);
+  const showTip = (text, px) => {
+    tip.textContent = text;
+    tip.hidden = false;
+    const width = host.clientWidth, half = tip.offsetWidth / 2;
+    tip.style.left = `${Math.min(width - half, Math.max(half, px * (width / W)))}px`;
+  };
+  return { svg, add, showTip, hideTip: () => { tip.hidden = true; } };
+}
+
+/** Annual growth as columns, the year so far muted, with the median year as a line. */
+function drawGrowth(host, years, partial) {
+  if (!host) return;
+  const rows = years.filter((r) => r.growth !== null);
+  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(220, Math.max(150, W * 0.32)));
+  const pad = { l: 42, r: 8, t: 12, b: 20 };
+  const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+  const max = Math.max(1000, ...rows.map((r) => r.growth));
+  const step = max > 4000 ? 1000 : 500, top = Math.ceil(max / step) * step;
+  const bw = plotW / rows.length, gap = Math.min(2, bw * 0.25);
+  const x = (i) => pad.l + i * bw;
+  const yv = (v) => pad.t + plotH - (v / top) * plotH;
+  const full = rows.filter((r) => r.year !== partial).map((r) => r.growth).sort((a, b) => a - b);
+  const med = full.length ? full[Math.floor(full.length / 2)] : null;
+  const { svg, add, showTip, hideTip } = svgFrame(host, W, H, `Annual pasture growth, ${rows[0]?.year} to ${rows[rows.length - 1]?.year}`);
+  for (let v = 0; v <= top; v += step) {
+    add("line", { x1: pad.l, x2: W - pad.r, y1: yv(v), y2: yv(v), stroke: v === 0 ? AXIS : GRID, "stroke-width": 1 });
+    add("text", { x: pad.l - 5, y: yv(v) + 3.5, "text-anchor": "end", "font-size": 10, fill: TICK_TEXT }).textContent = v.toLocaleString("en-AU");
+  }
+  rows.forEach((r, i) => {
+    const h = plotH - (yv(r.growth) - pad.t);
+    if (h > 0) add("rect", { x: x(i) + gap / 2, y: yv(r.growth), width: Math.max(1, bw - gap), height: h, rx: Math.min(2, bw / 3), fill: PASTURE, "fill-opacity": r.year === partial ? 0.35 : 1 });
+    if (r.year % 10 === 0) add("text", { x: x(i) + bw / 2, y: H - 5, "text-anchor": "middle", "font-size": 10, fill: TICK_TEXT }).textContent = String(r.year);
+  });
+  if (med !== null) {
+    add("line", { x1: pad.l, x2: W - pad.r, y1: yv(med), y2: yv(med), stroke: REF, "stroke-width": 1.5, "stroke-dasharray": "4 3" });
+    add("text", { x: W - pad.r - 2, y: yv(med) - 4, "text-anchor": "end", "font-size": 10, fill: REF }).textContent = `median ${Math.round(med).toLocaleString("en-AU")}`;
+  }
+  add("rect", { x: pad.l, y: pad.t, width: plotW, height: plotH, fill: "transparent" });
+  const show = (e) => {
+    const box = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(rows.length - 1, Math.floor((((e.clientX - box.left) / box.width) * W - pad.l) / bw)));
+    const r = rows[i];
+    showTip(`Apr ${r.year} – Mar ${r.year + 1}${r.year === partial ? " (so far)" : ""}: ${Math.round(r.growth).toLocaleString("en-AU")} kg/ha grown · ${r.rain === null ? "—" : `${Math.round(r.rain)} mm rain`}`, x(i) + bw / 2);
+  };
+  svg.addEventListener("pointermove", show);
+  svg.addEventListener("pointerdown", show);
+  svg.addEventListener("pointerleave", hideTip);
+}
+
+/** Seasonal satellite cover: total as a line, the green part as an area under it. */
+function drawCover(host, seasons) {
+  if (!host) return;
+  const rows = seasons.filter((s) => s.total !== null);
+  if (rows.length < 2) return;
+  const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(200, Math.max(140, W * 0.28)));
+  const pad = { l: 34, r: 8, t: 10, b: 20 };
+  const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+  const t = (s) => Number(s.from.slice(0, 4)) + (Number(s.from.slice(5, 7)) - 1) / 12;
+  const t0 = t(rows[0]), t1 = t(rows[rows.length - 1]);
+  const x = (s) => pad.l + ((t(s) - t0) / Math.max(0.1, t1 - t0)) * plotW;
+  const yv = (v) => pad.t + plotH - (v / 100) * plotH;
+  const { svg, add, showTip, hideTip } = svgFrame(host, W, H, `Ground cover by season, ${rows[0].from.slice(0, 4)} to ${rows[rows.length - 1].to.slice(0, 4)}`);
+  for (let v = 0; v <= 100; v += 25) {
+    add("line", { x1: pad.l, x2: W - pad.r, y1: yv(v), y2: yv(v), stroke: v === 0 ? AXIS : GRID, "stroke-width": 1 });
+    add("text", { x: pad.l - 5, y: yv(v) + 3.5, "text-anchor": "end", "font-size": 10, fill: TICK_TEXT }).textContent = `${v}%`;
+  }
+  for (let yr = Math.ceil(t0 / 5) * 5; yr <= t1; yr += 5) {
+    const xx = pad.l + ((yr - t0) / (t1 - t0)) * plotW;
+    add("text", { x: xx, y: H - 5, "text-anchor": "middle", "font-size": 10, fill: TICK_TEXT }).textContent = String(yr);
+  }
+  const green = rows.filter((s) => s.green !== null);
+  if (green.length > 1) {
+    const d = green.map((s, i) => `${i ? "L" : "M"}${x(s).toFixed(1)},${yv(s.green).toFixed(1)}`).join(" ")
+      + ` L${x(green[green.length - 1]).toFixed(1)},${yv(0)} L${x(green[0]).toFixed(1)},${yv(0)} Z`;
+    add("path", { d, fill: PASTURE, "fill-opacity": 0.35 });
+  }
+  add("path", { d: rows.map((s, i) => `${i ? "L" : "M"}${x(s).toFixed(1)},${yv(s.total).toFixed(1)}`).join(" "), fill: "none", stroke: INK, "stroke-width": 1.5, "stroke-linejoin": "round" });
+  add("rect", { x: pad.l, y: pad.t, width: plotW, height: plotH, fill: "transparent" });
+  const xs = rows.map(x);
+  const show = (e) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * W;
+    let i = 0;
+    for (let k = 1; k < xs.length; k++) if (Math.abs(xs[k] - px) < Math.abs(xs[i] - px)) i = k;
+    const s = rows[i];
+    showTip(`${fmtMonth(`${s.from}-01`)} – ${fmtMonth(`${s.to}-01`)}: ${Math.round(s.total)}% cover, ${s.green === null ? "—" : `${Math.round(s.green)}% green`}, ${s.bare === null ? "—" : `${Math.round(s.bare)}% bare`}`, xs[i]);
+  };
+  svg.addEventListener("pointermove", show);
+  svg.addEventListener("pointerdown", show);
+  svg.addEventListener("pointerleave", hideTip);
 }
 
 /** Every paddock's latest PastureKey reading: feed on offer, lowest first. */

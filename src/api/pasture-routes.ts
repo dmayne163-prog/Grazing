@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { commitForage, forageSummary, ForageError, isForageFile, parseForage, previewForage, type ForageUpload } from "../pasture/forage.js";
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db, setSetting } from "../db/database.js";
@@ -196,7 +197,7 @@ pastureApi.get("/pasture/paddocks/:id", (req, res) => {
 });
 
 /* A parsed report waits here between preview and commit; it is small. */
-const pending = new Map<string, { report: CiboUpload; filename: string; at: number }>();
+const pending = new Map<string, { report: CiboUpload | ForageUpload; filename: string; at: number }>();
 const PENDING_MS = 30 * 60_000;
 
 pastureApi.post(
@@ -210,13 +211,20 @@ pastureApi.post(
       return;
     }
     try {
+      if (isForageFile(filename)) {
+        const report = parseForage(filename, req.body);
+        const id = randomUUID();
+        pending.set(id, { report, filename, at: Date.now() });
+        res.json({ importId: id, ...previewForage(report) });
+        return;
+      }
       const report = parseCiboUpload(filename, req.body);
       for (const [k, v] of pending) if (Date.now() - v.at > PENDING_MS) pending.delete(k);
       const id = randomUUID();
       pending.set(id, { report, filename, at: Date.now() });
       res.json({ importId: id, ...(report.kind === "pasturekey" ? previewPastureKey(report.readings) : { kind: "farm-report", ...previewCibo(report) }) });
     } catch (e) {
-      if (e instanceof PastureError) { res.status(400).json({ error: e.message }); return; }
+      if (e instanceof PastureError || e instanceof ForageError) { res.status(400).json({ error: e.message }); return; }
       log.error("reading a pasture report failed", e);
       res.status(500).json({ error: "That file couldn't be read" });
     }
@@ -227,6 +235,14 @@ pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
   const p = pending.get(String(req.params["id"]));
   if (!p) { res.status(404).json({ error: "That preview has expired. Choose the file again." }); return; }
   pending.delete(String(req.params["id"]));
+  if (p.report.kind === "rainfall-pasture" || p.report.kind === "cover") {
+    commitForage(p.report);
+    const msg = `${req.user?.username ?? null} imported FORAGE ${p.report.kind === "cover" ? "ground cover" : "rainfall and pasture"} figures from ${p.filename}`;
+    log.info(msg);
+    addEvent({ ts: Date.now(), source: "pasture", kind: "import", severity: "info", message: msg, value: null });
+    res.json({ ok: true, forage: p.report.kind });
+    return;
+  }
   const r = p.report.kind === "pasturekey" ? commitPastureKey(p.report.readings, p.filename) : commitCibo(p.report, p.filename);
   const who = req.user?.username ?? null;
   const what = p.report.kind === "pasturekey" ? "PastureKey paddock readings" : "a Cibo Labs pasture report";
@@ -234,6 +250,11 @@ pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
   log.info(msg);
   addEvent({ ts: Date.now(), source: "pasture", kind: "import", severity: "info", message: msg, value: null });
   res.json({ ok: true, ...r });
+});
+
+/** FORAGE's long-term figures for the property, if any have been imported. */
+pastureApi.get("/pasture/forage", (_req, res) => {
+  res.json(forageSummary());
 });
 
 /* ------------------------------ rotation plan ----------------------------- */
