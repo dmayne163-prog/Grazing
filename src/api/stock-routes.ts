@@ -11,6 +11,7 @@ import {
   type MobCandidate, type MovementRow, type PaddockRowCandidate, type RainRow,
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
+import { movements } from "../stock/movements.js";
 import { paddockOnDate } from "../animals/location.js";
 import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
 import { addFromNlis, commitNlis, isNlisReport, nlisCheck, nlisUnknownArrivals, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
@@ -849,6 +850,18 @@ stockApi.get("/register", (req, res) => {
     mob_name: typeof q["mob"] === "string" && q["mob"] ? q["mob"] : undefined,
     property_only: q["property"] === "1",
   }));
+});
+
+/** Consignments on and off the property between two dates, with NLIS and scales records beside them. */
+stockApi.get("/movements", (req, res) => {
+  const q = req.query;
+  const from = typeof q["from"] === "string" ? q["from"] : "";
+  const to = typeof q["to"] === "string" ? q["to"] : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+    res.status(400).json({ error: "Choose a start date on or before the finish date" });
+    return;
+  }
+  act(res, () => movements(from, to));
 });
 
 /** A note added to a record afterwards. Notes are only ever added, never changed. */

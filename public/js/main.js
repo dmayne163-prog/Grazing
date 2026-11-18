@@ -9,6 +9,7 @@ import { openGateFinder } from "./gatefinder.js";
 import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
 import { openRegister } from "./register.js";
+import { openMovements } from "./movements.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
 import { openPlan } from "./plan.js";
@@ -728,6 +729,8 @@ function bindOverview() {
   if (pl) pl.onclick = () => openPlan(ctx);
   const reg = $("#openRegister", body);
   if (reg) reg.onclick = () => openRegister(ctx);
+  const mov = $("#openMovements", body);
+  if (mov) mov.onclick = () => openMovements(ctx);
   const us = $("#openUsers", body);
   if (us) us.onclick = () => openUsers(ctx);
   const nl = $("#openNlis", body);
@@ -1446,7 +1449,7 @@ start();
 /* ---------------------------------- mobs ----------------------------------- */
 
 function mobsTable() {
-  const importBtn = `<div class="btns"><button class="btn primary" id="openPlan">Rotation planner…</button><button class="btn" id="openRegister">Head count register…</button>${canEdit()
+  const importBtn = `<div class="btns"><button class="btn primary" id="openPlan">Rotation planner…</button><button class="btn" id="openRegister">Head count register…</button><button class="btn" id="openMovements">Cattle on and off…</button>${canEdit()
     ? '<button class="btn" data-import="session">Import a cattle session…</button>' : ""}</div>`;
   if (state.mobs.length === 0) {
     return `<p class="muted small">No mobs yet. ${canEdit() ? "Import AgriWebb's mob list (.xlsx) from <b>Tools</b>." : ""}</p>`;

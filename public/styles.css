@@ -409,6 +409,7 @@ a.btn{color:inherit;text-decoration:none;display:inline-block}
 .tiny{font-size:11.5px}
 .nowrap{white-space:nowrap}
 .bad{color:var(--crit)}
+.good{color:var(--good)}
 table.mobs-review td{vertical-align:top}
 table.mobs-review input[type="text"],table.mobs-review select{
   width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;
