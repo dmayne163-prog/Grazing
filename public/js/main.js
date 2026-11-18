@@ -10,6 +10,7 @@ import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
 import { openRegister } from "./register.js";
 import { openMovements } from "./movements.js";
+import { conditionText, loadText } from "./capacity.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
 import { openPlan } from "./plan.js";
@@ -1534,9 +1535,13 @@ async function loadGrazing(f) {
     ...h.rests.map((r) => ({ at: r.from, r })),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.p ? -1 : 1));
 
+  const cap = data.capacity;
+  const use = cap ? loadText(cap.ae_year, cap.ae) : null;
   el.innerHTML = `
     <p class="small">${status}</p>
     <dl class="facts">
+      ${cap ? `<dt>Carrying capacity</dt><dd>${nf0.format(cap.ae)} AE long-term (${cap.ha_per_ae ? cap.ha_per_ae.toFixed(1) : "—"} ha/AE), condition ${conditionText(cap.condition)} · carried ${nf0.format(cap.ae_year)} AE on average over the last 12 months${use.pct !== null ? ` <span class="${use.cls}">(${use.pct}%)</span>` : ""}
+        <div class="muted tiny">${cap.land_types.slice(0, 3).map((l) => `${escapeHtml(l.name)} ${Math.round(l.share_pct)}%`).join(" · ")}</div></dd>` : ""}
       <dt>Last 12 months</dt><dd>${h.grazing_days_365} grazing days · ${nf0.format(h.head_days_365)} head-days${area ? ` (${nf0.format(h.head_days_365 / area)} per ha)` : ""}</dd>
     </dl>
     <ul class="timeline">${items.map(({ p, r }) => p ? `

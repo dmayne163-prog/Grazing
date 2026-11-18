@@ -12,6 +12,7 @@ import {
 } from "../stock/agriwebb-xlsx.js";
 import { addRegisterNote, headRegister } from "../stock/register.js";
 import { movements } from "../stock/movements.js";
+import { paddockCapacity } from "../pasture/capacity.js";
 import { paddockOnDate } from "../animals/location.js";
 import { commitKillSheet, isKillSheet, parseKillSheet, planKillSheet, type KillSheet } from "../animals/killsheet.js";
 import { addFromNlis, commitNlis, isNlisReport, nlisCheck, nlisUnknownArrivals, parseNlis, planNlis, type NlisRow } from "../animals/nlis.js";
@@ -404,6 +405,7 @@ stockApi.get("/paddocks/:id/grazing", (req, res) => {
   const name = (pid: number) => byId.get(pid)?.row.name ?? `#${pid}`;
   res.json({
     records_begin: recordsBegin(),
+    capacity: paddockCapacity(id),
     history: h ? {
       ...h,
       periods: h.periods.map((p) => ({ ...p, shared_with: p.shared_with.map(name) })),

@@ -46,7 +46,7 @@ const PICKERS = {
     help: `A download from Cibo Labs, as the .zip they send: PastureKey's paddock readings (PaddocksTsdmTimeSeries…zip),
       or the farm's Pasture Biomass report (pasturebiomass_….zip). Importing a newer download later just adds what's new.<br>
       Or a FORAGE data file from the Long Paddock: the Rainfall and Pasture file (dataInGraphs_Forage…csv) or the
-      Ground Cover file (ForageGroundCoverReport_coverData_…csv). A newer one replaces the last.`,
+      Ground Cover file (ForageGroundCoverReport_coverData_…csv), or the paddock carrying capacity file (CarryingCapacityFor_Paddock_LandType_dataOutput_…csv). A newer one replaces the last.`,
   },
   map: {
     title: "Import a map",
@@ -128,7 +128,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
     dialog.querySelector(".body").innerHTML = `<p>Reading <b>${escapeHtml(file.name)}</b>…</p>`;
     try {
       // Cibo Labs names its downloads pasturebiomass_<farm>_<time>.zip.
-      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_|^PaddocksTsdmTimeSeries|forage.*\.csv$/i.test(file.name)) {
+      if (kind === "pasture" || /^pasturebiomass_|tsdm_report\.csv$|^myfarmkey_|^PaddocksTsdmTimeSeries|forage.*\.csv$|^CarryingCapacityFor_Paddock_LandType/i.test(file.name)) {
         showPastureReview(file.name, await upload("/api/pasture/import/preview", file));
         return;
       }
@@ -591,6 +591,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
   function showForageReview(filename, p) {
     const fmt = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "");
     const ym = (m) => (m ? new Date(`${m}-01T00:00:00`).toLocaleDateString("en-AU", { month: "short", year: "numeric" }) : "");
+    if (p.forage === "ltcc") { showLtccReview(filename, p, fmt); return; }
     const what = p.forage === "cover"
       ? `Satellite ground cover for the property, season by season: <b>${p.seasons}</b> seasons from ${ym(p.from)} to ${ym(p.to)}.`
       : `Rainfall and modelled pasture growth for the property: <b>${p.years}</b> years (April to March) from ${p.from} to ${p.to}, and ${p.months} months of standing feed and ground cover.`;
@@ -619,6 +620,41 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
         dialog.close();
         onDone(`Imported FORAGE ${p.forage === "cover" ? "ground cover" : "rainfall and pasture"} figures`);
+      } catch (e) {
+        btn.disabled = false;
+        dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);
+      }
+    };
+  }
+
+  function showLtccReview(filename, p, fmt) {
+    dialog.innerHTML = `
+      <div class="dlg">
+        <header>
+          <h2>Review FORAGE carrying capacity</h2>
+          <div class="muted small">${escapeHtml(filename)}${p.report_date ? ` · made ${fmt(p.report_date)}` : ""}</div>
+        </header>
+        <div class="body">
+          <p>Long-term carrying capacity for <b>${p.paddocks}</b> paddocks, by land type: <b>${Number(p.ae).toLocaleString("en-AU")} AE</b> in all, in A condition.</p>
+          ${p.unmatched.length ? `<div class="note err">Not matched to a paddock on the map: ${p.unmatched.map(escapeHtml).join(", ")}. These are kept but won't show against a paddock.</div>` : '<p class="small good">Every paddock matches one on the map.</p>'}
+          ${p.missing.length ? `<p class="small muted">On the map but not in the report: ${p.missing.map(escapeHtml).join(", ")}.</p>` : ""}
+          ${p.replaces ? `<p class="small">This replaces the carrying capacity imported before${/^\d{4}-/.test(p.replaces) ? ` (made ${fmt(p.replaces)})` : ""}. Land condition you've set is kept.</p>` : ""}
+          <p class="muted small gap-top">It shows on the Pasture tab under <b>Carrying capacity by paddock</b>, and on each paddock. The rotation planner uses it to count rests on poorer country for less.</p>
+        </div>
+        <footer>
+          <span class="grow"></span>
+          <button class="btn" id="back">Back</button>
+          <button class="btn primary" id="commit">Import</button>
+        </footer>
+      </div>`;
+    dialog.querySelector("#back").onclick = () => showPicker();
+    dialog.querySelector("#commit").onclick = async () => {
+      const btn = dialog.querySelector("#commit");
+      btn.disabled = true;
+      try {
+        await send("POST", `/api/pasture/import/${p.importId}/commit`, {});
+        dialog.close();
+        onDone("Imported FORAGE paddock carrying capacity");
       } catch (e) {
         btn.disabled = false;
         dialog.querySelector(".body").insertAdjacentHTML("afterbegin", `<div class="note err">${escapeHtml(e.message)}</div>`);

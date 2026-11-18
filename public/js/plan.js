@@ -33,7 +33,7 @@ export async function openPlan(ctx) {
       <div class="muted tiny">${nf(o.area_ha)} ha · reading ${o.reading ? escapeHtml(o.reading) : "—"}</div></td>
     <td class="num">${nf(o.now)}</td>
     <td class="num"><b>${o.stay}</b>${o.days.median > r.max_days ? "+" : ""}${o.days.low < o.days.median ? ` <span class="muted tiny">(dry ${o.days.low})</span>` : ""}</td>
-    <td class="num">${o.rest_days === null ? '<span class="muted">—</span>' : o.rest_days}</td></tr>`;
+    <td class="num">${o.rest_days === null ? '<span class="muted">—</span>' : o.rest_days}${o.rest_days !== null && o.rest_weight < 1 ? `<div class="muted tiny" title="Poorer country: its pasture grows back more slowly, so a rest here counts for less">counts as ${o.rest_counts}</div>` : ""}</td></tr>`;
 
   d.innerHTML = `
     <div class="dlg wide report">
@@ -69,7 +69,7 @@ export async function openPlan(ctx) {
             : `<p class="small bad">No empty paddock has ${r.min_days} days of feed for this mob above ${nf(r.residual)} kg/ha.</p>`}
           </section>`).join("")}
         ${p.unplanned?.length ? `<p class="small muted">Not planned (in a management-only or holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
-        <p class="muted tiny">Days of feed: until the paddock is grazed down to the residual by this mob, with growth from today's soil water across past seasons — the median, and a drier run in brackets. Capped at the longest stay ("+" means more feed than that). Bold is the suggestion: the most urgent mob gets its best paddock first. Rested: days since the paddock was last grazed. Only empty paddocks with pasture readings are offered.</p>
+        <p class="muted tiny">Days of feed: until the paddock is grazed down to the residual by this mob, with growth from today's soil water across past seasons — the median, and a drier run in brackets. Capped at the longest stay ("+" means more feed than that). Bold is the suggestion: the most urgent mob gets its best paddock first. Rested: days since the paddock was last grazed; on poorer country (FORAGE's carrying capacity) a rest counts for less, as shown under it. Only empty paddocks with pasture readings are offered.</p>
       </div>
       <footer class="btns"><button class="btn" id="plClose">Close</button></footer>
     </div>`;

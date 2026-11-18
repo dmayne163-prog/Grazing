@@ -18,7 +18,7 @@
  */
 
 // Bumped when the caching rules change, so phones drop copies kept under the old ones.
-const STATIC = "static-v4";
+const STATIC = "static-v5";
 const DATA = "data-v2";
 const PHOTOS = "photos-v1";
 const TILES = "tiles-qld";
@@ -31,7 +31,7 @@ const TILES = "tiles-qld";
 const SHELL = [
   "/styles.css", "/manifest.webmanifest", "/icons/icon.svg",
   "/vendor/leaflet/leaflet.css", "/vendor/leaflet/leaflet.js", "/vendor/geoman/leaflet-geoman.css", "/vendor/geoman/leaflet-geoman.min.js",
-  ...["animalui", "api", "editor", "gatefinder", "importer", "main", "map", "moblayer", "movements", "nlischeck", "notes",
+  ...["animalui", "api", "capacity", "editor", "gatefinder", "importer", "main", "map", "moblayer", "movements", "nlischeck", "notes",
     "offline", "optiweighui", "outbox", "pasture", "plan", "rain", "register", "reports", "ruminati",
     "stockui", "users"].map((n) => `/js/${n}.js`),
 ];

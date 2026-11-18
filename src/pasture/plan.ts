@@ -17,6 +17,7 @@ import { listGates } from "../map/gates.js";
 import { mobViews, paddockHistories, today } from "../stock/store.js";
 import { StockError } from "../stock/actions.js";
 import type { PlanGroup, PlanProjection } from "./model.js";
+import { restWeights } from "./capacity.js";
 
 export interface PlanRules { residual: number; min_days: number; max_days: number }
 
@@ -101,6 +102,8 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   const occupied = new Set(groups.flatMap((g) => g.paddocks));
   const hist = paddockHistories();
   const gates = listGates().filter((g) => g.paddocks.length === 2);
+  // A rest on poorer country counts for less: its pasture grows back more slowly.
+  const { weights } = restWeights();
   const nextDoor = (a: number, b: number) => gates.some((g) => g.paddocks.includes(a) && g.paddocks.includes(b));
 
   const mobs = groups.map((g) => {
@@ -128,12 +131,14 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
         const adjacent = g.paddocks.some((p) => nextDoor(p, o.paddock_id));
         const stay = Math.min(o.days.median, rules.max_days);
+        const weight = weights.get(o.paddock_id) ?? 1;
+        const restCounts = rest === null ? null : Math.round(rest * weight);
         // Feed for a full stay counts most, then a long rest, then being next door (less walking).
-        const score = stay + Math.min(rest ?? 60, 120) / 10 + (adjacent ? 5 : 0);
+        const score = stay + Math.min(restCounts ?? 60, 120) / 10 + (adjacent ? 5 : 0);
         const p = pad.get(o.paddock_id)!;
         return {
           paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
-          stay, days: o.days, rest_days: rest, adjacent, score: Math.round(score * 10) / 10,
+          stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
         };
       })
       .sort((a, b) => b.score - a.score);

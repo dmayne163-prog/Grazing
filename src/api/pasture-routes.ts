@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { capacitySummary, CapacityError, commitLtcc, isLtccFile, parseLtcc, previewLtcc, setCondition, type LtccUpload } from "../pasture/capacity.js";
 import { commitForage, forageSummary, ForageError, isForageFile, parseForage, previewForage, type ForageUpload } from "../pasture/forage.js";
 import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
@@ -197,7 +198,7 @@ pastureApi.get("/pasture/paddocks/:id", (req, res) => {
 });
 
 /* A parsed report waits here between preview and commit; it is small. */
-const pending = new Map<string, { report: CiboUpload | ForageUpload; filename: string; at: number }>();
+const pending = new Map<string, { report: CiboUpload | ForageUpload | LtccUpload; filename: string; at: number }>();
 const PENDING_MS = 30 * 60_000;
 
 pastureApi.post(
@@ -211,6 +212,13 @@ pastureApi.post(
       return;
     }
     try {
+      if (isLtccFile(filename)) {
+        const report = parseLtcc(filename, req.body);
+        const id = randomUUID();
+        pending.set(id, { report, filename, at: Date.now() });
+        res.json({ importId: id, ...previewLtcc(report) });
+        return;
+      }
       if (isForageFile(filename)) {
         const report = parseForage(filename, req.body);
         const id = randomUUID();
@@ -224,7 +232,7 @@ pastureApi.post(
       pending.set(id, { report, filename, at: Date.now() });
       res.json({ importId: id, ...(report.kind === "pasturekey" ? previewPastureKey(report.readings) : { kind: "farm-report", ...previewCibo(report) }) });
     } catch (e) {
-      if (e instanceof PastureError || e instanceof ForageError) { res.status(400).json({ error: e.message }); return; }
+      if (e instanceof PastureError || e instanceof ForageError || e instanceof CapacityError) { res.status(400).json({ error: e.message }); return; }
       log.error("reading a pasture report failed", e);
       res.status(500).json({ error: "That file couldn't be read" });
     }
@@ -235,6 +243,14 @@ pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
   const p = pending.get(String(req.params["id"]));
   if (!p) { res.status(404).json({ error: "That preview has expired. Choose the file again." }); return; }
   pending.delete(String(req.params["id"]));
+  if (p.report.kind === "ltcc") {
+    commitLtcc(p.report);
+    const msg = `${req.user?.username ?? null} imported FORAGE paddock carrying capacity from ${p.filename}`;
+    log.info(msg);
+    addEvent({ ts: Date.now(), source: "pasture", kind: "import", severity: "info", message: msg, value: null });
+    res.json({ ok: true, forage: "ltcc" });
+    return;
+  }
   if (p.report.kind === "rainfall-pasture" || p.report.kind === "cover") {
     commitForage(p.report);
     const msg = `${req.user?.username ?? null} imported FORAGE ${p.report.kind === "cover" ? "ground cover" : "rainfall and pasture"} figures from ${p.filename}`;
@@ -255,6 +271,23 @@ pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
 /** FORAGE's long-term figures for the property, if any have been imported. */
 pastureApi.get("/pasture/forage", (_req, res) => {
   res.json(forageSummary());
+});
+
+/** Long-term carrying capacity by paddock, against what each has carried. */
+pastureApi.get("/pasture/capacity", (_req, res) => {
+  res.json(capacitySummary());
+});
+
+/** Land condition for a paddock: the share in A, B, C and D. */
+pastureApi.put("/pasture/capacity/:id/condition", requireAdmin, express.json(), (req, res) => {
+  try {
+    const c = setCondition(Number(req.params["id"]), (req.body ?? {}) as Record<string, unknown>);
+    log.info(`${req.user?.username ?? null} set land condition for paddock ${req.params["id"]}: A ${c.a}% B ${c.b}% C ${c.c}% D ${c.d}%`);
+    res.json(c);
+  } catch (e) {
+    if (e instanceof CapacityError) { res.status(400).json({ error: e.message }); return; }
+    throw e;
+  }
 });
 
 /* ------------------------------ rotation plan ----------------------------- */

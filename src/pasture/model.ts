@@ -157,7 +157,7 @@ interface Inputs {
  * them (flat before the first and after the last). A mob with none uses its
  * current weight, or for one since sold AgriWebb's figure, else 1 AE a head.
  */
-function aePerHead(): (mobId: number, day: number) => number {
+export function aePerHead(): (mobId: number, day: number) => number {
   const fallback = new Map<number, number>();
   for (const v of mobViews(today())) if (v.ae_head !== null) fallback.set(v.mob.id, v.ae_head);
   for (const m of db.prepare("SELECT id, data FROM mobs").all() as Array<{ id: number; data: string }>) {

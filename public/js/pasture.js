@@ -7,6 +7,7 @@
  */
 import { get, send } from "./api.js";
 import { escapeHtml, pastureColour } from "./map.js";
+import { openCapacity } from "./capacity.js";
 
 // Validated on the dark surface (#151A1D) beside the SILO orange: lightness
 // band, chroma, colour-blind separation and 3:1 contrast all pass.
@@ -42,7 +43,7 @@ export async function renderPasture(el, ctx) {
   if (!farm.length && !paddocks.length) {
     el.innerHTML = `<p class="muted small">No pasture readings yet. Import PastureKey's paddock readings, or Cibo Labs' Pasture Biomass report, as the .zip Cibo sends.</p><div id="longTerm"></div>${importBtn}`;
     bind();
-    loadLongTerm(el.querySelector("#longTerm"));
+    loadLongTerm(el.querySelector("#longTerm"), ctx);
     return;
   }
 
@@ -50,7 +51,7 @@ export async function renderPasture(el, ctx) {
   bind();
   if (farm.length) drawPasture(el.querySelector("#pastureChart"), farm);
   loadOutlook(el.querySelector("#outlook"), ctx);
-  loadLongTerm(el.querySelector("#longTerm"));
+  loadLongTerm(el.querySelector("#longTerm"), ctx);
 }
 
 /* -------------------------------- long-term -------------------------------- */
@@ -60,12 +61,15 @@ export async function renderPasture(el, ctx) {
  * and satellite ground cover since 1987, with where this year and season sit.
  * Whole-property, modelled with an assumed stocking rate: context, not feed.
  */
-async function loadLongTerm(host) {
+async function loadLongTerm(host, ctx) {
   if (!host) return;
   let f;
   try { f = await get("/api/pasture/forage"); } catch { return; }
+  const capBtn = '<div class="btns gap-top"><button class="btn" id="openCapacity">Carrying capacity by paddock…</button></div>';
+  const bindCap = () => { const b = host.querySelector("#openCapacity"); if (b) b.onclick = () => openCapacity(ctx); };
   if (!f) {
-    host.innerHTML = `<h3>Long-term · FORAGE</h3><p class="muted small">Import FORAGE's data files from the Long Paddock (Rainfall and Pasture, and Ground Cover) to see how this year compares with the last 50.</p>`;
+    host.innerHTML = `<h3>Long-term · FORAGE</h3><p class="muted small">Import FORAGE's data files from the Long Paddock (Rainfall and Pasture, and Ground Cover) to see how this year compares with the last 50.</p>${capBtn}`;
+    bindCap();
     return;
   }
   const pct = (p) => (p === null || p === undefined ? "" : ` <span class="muted">(${p}${p % 10 === 1 && p !== 11 ? "st" : p % 10 === 2 && p !== 12 ? "nd" : p % 10 === 3 && p !== 13 ? "rd" : "th"} percentile)</span>`);
@@ -87,7 +91,8 @@ async function loadLongTerm(host) {
     <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${f.years ? `<p class="muted small">Pasture grown each year, April to March (FORAGE's model). The line is the median year.</p><div class="rainchart" id="forageGrowth"></div>` : ""}
     ${f.cover ? `<p class="muted small gap-top">Ground cover from satellite, each season: total, and the green part of it.</p><div class="rainchart" id="forageCover"></div>` : ""}
-    <p class="muted tiny gap-top">Whole-property figures from the Queensland Government's FORAGE reports${made ? `, made ${fmtDay(made)}` : ""}. Pasture is modelled with an assumed stocking rate: it shows how a year compares, not the feed in a paddock.</p>`;
+    <p class="muted tiny gap-top">Whole-property figures from the Queensland Government's FORAGE reports${made ? `, made ${fmtDay(made)}` : ""}. Pasture is modelled with an assumed stocking rate: it shows how a year compares, not the feed in a paddock.</p>${capBtn}`;
+  bindCap();
   if (f.years) drawGrowth(host.querySelector("#forageGrowth"), f.years.list, f.years.partial);
   if (f.cover) drawCover(host.querySelector("#forageCover"), f.cover.seasons);
 }

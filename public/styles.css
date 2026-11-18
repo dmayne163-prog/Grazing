@@ -577,6 +577,8 @@ ul.gatefind .pick input{margin-top:4px}
 dialog .dlg.wide{max-width:980px}
 dialog:has(.dlg.wide){width:min(980px, calc(100vw - 24px))}
 .row3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}
+.row4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media (max-width:640px){ .row4{grid-template-columns:1fr 1fr} }
 @media (max-width:640px){ .row3{grid-template-columns:1fr} }
 .chips{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0}
 .rule{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:0 0 8px}
