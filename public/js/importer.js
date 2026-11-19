@@ -435,6 +435,22 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
               </label>`).join("")}
             ${others.length ? `<label class="choice"><input type="radio" name="sMob" value="other"><span>Another mob
               <select id="sOther"><option value="">choose…</option>${others.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} (${m.head} hd)</option>`).join("")}</select></span></label>` : ""}
+            <label class="choice"><input type="radio" name="sMob" value="new"><span><b>A new mob</b> — cattle bought in, or agisted cattle arriving</span></label>
+            <div id="sNewBox" class="newmob" hidden>
+              <div class="row2">
+                <div class="f"><label for="sNewName">Mob name</label><input id="sNewName" value="${escapeHtml(p.name)}" autocomplete="off"></div>
+                <div class="f"><label for="sNewPad">Paddock they went to</label><select id="sNewPad"><option value="">choose…</option>
+                  ${(p.paddocks || []).map((x) => `<option value="${x.id}">${escapeHtml(x.name)}</option>`).join("")}</select></div>
+              </div>
+              <div class="row2">
+                <div class="f"><label for="sNewFrom">Came from</label><input id="sNewFrom" placeholder="seller or property" autocomplete="off"></div>
+                <div class="f"><label for="sNewOwner">Whose cattle</label><select id="sNewOwner"><option value="">Ours — bought</option>
+                  ${(p.owners || []).map((o) => `<option value="${escapeHtml(o)}">Agisted — ${escapeHtml(o)}</option>`).join("")}
+                  <option value="__other">Agisted — another owner…</option></select></div>
+              </div>
+              <div class="f" id="sNewOwnerOtherBox" hidden><label for="sNewOwnerOther">Owner</label><input id="sNewOwnerOther" autocomplete="off"></div>
+              <p class="muted tiny">The mob starts with the ${p.count} head in this session, on the session date: a purchase, or for agisted cattle a transfer on to the farm.</p>
+            </div>
             <label class="choice"><input type="radio" name="sMob" value=""><span>Don't put them in a mob yet</span></label>
           </div>
           <label class="radio gap-top"><input type="checkbox" id="sWeight" checked> Set the mob's average weight from this session</label>
@@ -463,9 +479,24 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
         </footer>
       </div>`;
 
+    const isNew = () => dialog.querySelector('input[name="sMob"]:checked')?.value === "new";
+    const newMob = () => {
+      const o = dialog.querySelector("#sNewOwner").value;
+      return {
+        name: dialog.querySelector("#sNewName").value.trim(),
+        paddock_id: Number(dialog.querySelector("#sNewPad").value) || null,
+        origin: dialog.querySelector("#sNewFrom").value.trim() || null,
+        owner: o === "__other" ? dialog.querySelector("#sNewOwnerOther").value.trim() || null : o || null,
+      };
+    };
     const chosen = () => {
       const r = dialog.querySelector('input[name="sMob"]:checked');
       if (!r) return undefined;
+      if (r.value === "new") {
+        const n = newMob();
+        const o = dialog.querySelector("#sNewOwner").value;
+        return n.name && n.paddock_id && !(o === "__other" && !n.owner) ? "new" : undefined;
+      }
       if (r.value === "other") return dialog.querySelector("#sOther").value ? Number(dialog.querySelector("#sOther").value) : undefined;
       return r.value === "" ? null : Number(r.value);
     };
@@ -480,16 +511,23 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
     });
     const update = () => {
       const mob = chosen();
+      dialog.querySelector("#sNewBox").hidden = !isNew();
+      dialog.querySelector("#sNewOwnerOtherBox").hidden = dialog.querySelector("#sNewOwner").value !== "__other";
       dialog.querySelector("#commit").disabled = mob === undefined;
-      dialog.querySelector("#summary").textContent = mob === undefined ? "Choose a mob, or none" : "";
+      dialog.querySelector("#summary").textContent = mob === undefined
+        ? (isNew() ? "Name the new mob and choose its paddock" : "Choose a mob, or none") : "";
       const w = dialog.querySelector("#sWeight");
       w.disabled = !mob;
-      const later = mob ? p.later_weighing[mob] : null;
+      const later = mob && mob !== "new" ? p.later_weighing[mob] : null;
       dialog.querySelector("#sWeightNote").textContent = later
         ? `This mob has a later weighing (${Math.round(later.weight_kg)} kg on ${fmt(later.date)}), which stays its current weight.`
         : "";
     };
     dialog.querySelectorAll('input[name="sMob"]').forEach((r) => r.addEventListener("change", update));
+    ["#sNewName", "#sNewPad", "#sNewOwner", "#sNewOwnerOther"].forEach((s) => {
+      dialog.querySelector(s).addEventListener("input", update);
+      dialog.querySelector(s).addEventListener("change", update);
+    });
     if (mobId) {
       const listed = dialog.querySelector(`input[name="sMob"][value="${mobId}"]`);
       if (listed) listed.checked = true;
@@ -510,7 +548,7 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
       try {
         const mob = chosen();
         const res = await send("POST", `/api/import/records/${p.importId}/commit`, {
-          mob_id: mob, name: dialog.querySelector("#sName").value, date: dialog.querySelector("#sDate").value || null,
+          mob_id: mob === "new" ? null : mob, new_mob: mob === "new" ? newMob() : null, name: dialog.querySelector("#sName").value, date: dialog.querySelector("#sDate").value || null,
           update_mob_weight: !!mob && dialog.querySelector("#sWeight").checked,
           sold: soldBox.checked,
           destination: dialog.querySelector("#sTo").value,

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db/database.js";
 import { getFeature } from "../map/store.js";
 import { StockError, type When } from "../stock/actions.js";
-import { addEvent, allSegments, mobViews, type EventInput } from "../stock/store.js";
+import { addEvent, allSegments, createMobWithEvents, mobViews, type EventInput } from "../stock/store.js";
 import type { ParsedSession, SessionRow } from "./session.js";
 import { picName } from "./nlis.js";
 
@@ -602,17 +602,57 @@ export function planSession(s: ParsedSession): SessionPlan {
  * if asked — the mob's average weight set from the session. One batch, so
  * the whole session can be undone.
  */
+/**
+ * Cattle arriving on the place at this session: bought, or agisted cattle
+ * coming on (an owner given). They become a new mob in the paddock they went
+ * to, with the session's head on the day — a purchase, or for agisted cattle
+ * a transfer on to farm, never a purchase.
+ */
+export interface NewMobInput { name: string; paddock_id: number; owner: string | null; origin: string | null }
+
+function checkNewMob(m: NewMobInput, sold: boolean): NewMobInput {
+  const name = String(m.name ?? "").trim().slice(0, 120);
+  if (!name) throw new StockError("Give the new mob a name");
+  if (sold) throw new StockError("Cattle sold at this session can't also be a new mob");
+  const open = db.prepare("SELECT 1 FROM mobs WHERE name = ? COLLATE NOCASE AND closed_at IS NULL").get(name);
+  if (open) throw new StockError(`There's already a mob called ${name}`);
+  const p = db.prepare("SELECT kind FROM features WHERE id = ? AND deleted_at IS NULL").get(Number(m.paddock_id)) as { kind: string } | undefined;
+  if (!p || p.kind !== "paddock") throw new StockError("Choose the paddock they went to");
+  const clean = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
+  return { name, paddock_id: Number(m.paddock_id), owner: clean(m.owner), origin: clean(m.origin) };
+}
+
 export function commitSession(
-  s: ParsedSession, opts: { mob_id: number | null; date: string | null; name: string | null; update_mob_weight: boolean; source: string; filename: string; sold?: { destination: string | null } | null },
+  s: ParsedSession, opts: { mob_id: number | null; date: string | null; name: string | null; update_mob_weight: boolean; source: string; filename: string; sold?: { destination: string | null } | null; new_mob?: NewMobInput | null },
   username: string | null
-): { batch: string; session_id: number; created: number; weighed: number } {
+): { batch: string; session_id: number; created: number; weighed: number; mob_id: number | null } {
   const date = opts.date ?? s.date;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new StockError("The session needs a date");
-  if (opts.mob_id !== null && !db.prepare("SELECT 1 FROM mobs WHERE id = ?").get(opts.mob_id)) throw new StockError("No such mob");
+  const newMob = opts.new_mob ? checkNewMob(opts.new_mob, !!opts.sold) : null;
+  if (!newMob && opts.mob_id !== null && !db.prepare("SELECT 1 FROM mobs WHERE id = ?").get(opts.mob_id)) throw new StockError("No such mob");
   const batch = randomUUID();
   const now = Date.now();
 
   return db.transaction(() => {
+    if (newMob) {
+      const sexes = [...new Set(s.rows.map((r) => r.sex))];
+      const head = s.rows.length;
+      const arrival: EventInput = newMob.owner
+        ? { date, kind: "transfer", head_change: head, data: { off_farm: true, note: `Agisted cattle on from ${newMob.origin ?? "off farm"}, session ${opts.name ?? s.name}` } }
+        : { date, kind: "purchase", head_change: head, data: { note: `Bought${newMob.origin ? ` from ${newMob.origin}` : ""}, session ${opts.name ?? s.name}`, ...(newMob.origin ? { seller: newMob.origin } : {}) } };
+      opts = {
+        ...opts,
+        mob_id: createMobWithEvents({
+          name: newMob.name, species: "cattle", breed: null, age_class: null,
+          sex: sexes.length === 1 && sexes[0] ? sexes[0] : null,
+          tag_colour: null, management_tag: null, origin: newMob.origin, birth_date: null, description: null,
+          owner: newMob.owner, data: {},
+        }, [
+          { date, kind: "opening", head: 0, paddock_ids: [newMob.paddock_id], data: { note: "New mob from a scales session" } },
+          arrival,
+        ], "app", username, batch),
+      };
+    }
     const sid = Number(db.prepare(`
       INSERT INTO weigh_sessions (name, date, source, filename, animal_count, mob_id, batch, username, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -685,7 +725,7 @@ export function commitSession(
     }
     // Weights in the session not set on the mob above still bring its weight up to date.
     if (opts.mob_id !== null && !opts.sold) reconcileMobWeight(opts.mob_id, username, batch);
-    return { batch, session_id: sid, created, weighed };
+    return { batch, session_id: sid, created, weighed, mob_id: opts.mob_id };
   })();
 }
 

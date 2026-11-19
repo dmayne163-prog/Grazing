@@ -39,6 +39,7 @@ import {
 import {
   createMobWithEvents, EVENT_ORDER, mobViews, paddockHistories, paddockStock, recordsBegin,
   today, updateMob, type EventInput,
+  listMobs,
 } from "../stock/store.js";
 
 const log = logger("stock");
@@ -484,7 +485,11 @@ stockApi.post(
         const id = storePreview(req, filename, "gallagher-session", { session, filename });
         const allMobs = mobViews().map((v) => ({ id: v.mob.id, name: v.mob.name, head: v.state.head }))
           .sort((x, y) => x.name.localeCompare(y.name));
-        res.json({ importId: id, type: "session", name: session.name, date: session.date, count: session.rows.length, allMobs, ...plan });
+        // For a new mob: the paddocks it could go to, and the owners of agisted cattle so far.
+        const paddocks = listFeaturesOfKind("paddock").map((f) => ({ id: f.id, name: f.name, subtype: f.subtype }))
+          .sort((x, y) => x.name.localeCompare(y.name, "en", { numeric: true }));
+        const owners = [...new Set(listMobs(true).map((m) => m.owner).filter((o): o is string => !!o))].sort();
+        res.json({ importId: id, type: "session", name: session.name, date: session.date, count: session.rows.length, allMobs, paddocks, owners, ...plan });
         return;
       }
       const parsed = await parseAgriWebbSheet(req.body);
@@ -787,9 +792,11 @@ function commitTsiImport(row: ImportRow, body: unknown, username: string | null)
 function commitSessionImport(row: ImportRow, body: unknown, username: string | null) {
   const { session, filename } = JSON.parse(row.payload) as { session: ParsedSession; filename: string };
   const b = (body ?? {}) as Record<string, unknown>;
-  const mob = b["mob_id"] === null || b["mob_id"] === undefined || b["mob_id"] === "" ? null : Number(b["mob_id"]);
+  const nm = b["new_mob"] && typeof b["new_mob"] === "object" ? b["new_mob"] as Record<string, unknown> : null;
+  const mob = nm || b["mob_id"] === null || b["mob_id"] === undefined || b["mob_id"] === "" ? null : Number(b["mob_id"]);
   try {
     const r = commitSession(session, {
+      new_mob: nm ? { name: String(nm["name"] ?? ""), paddock_id: Number(nm["paddock_id"]), owner: (nm["owner"] as string | null) ?? null, origin: (nm["origin"] as string | null) ?? null } : null,
       mob_id: mob,
       date: typeof b["date"] === "string" && b["date"] ? b["date"] : null,
       name: typeof b["name"] === "string" && b["name"].trim() ? b["name"].trim() : null,
@@ -801,7 +808,7 @@ function commitSessionImport(row: ImportRow, body: unknown, username: string | n
     }, username);
     return {
       created: r.weighed, batch: r.batch,
-      summary: `session: ${session.rows.length} animals (${r.created} new), ${r.weighed} weights`,
+      summary: `session: ${session.rows.length} animals (${r.created} new), ${r.weighed} weights${nm ? `, as a new mob: ${String(nm["name"]).trim()}` : ""}`,
     };
   } catch (e) {
     if (e instanceof StockError) throw new ImportError(e.message);

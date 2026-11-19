@@ -630,3 +630,4 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .note-item.pending{opacity:.85}
 .note-item .linkbtn{margin-left:8px;font-size:12px}
 .note-photo{display:block;max-width:100%;max-height:260px;border-radius:8px;margin-top:6px}
+.newmob{margin:4px 0 8px 26px;padding:8px 10px;border-left:2px solid var(--line-soft)}
