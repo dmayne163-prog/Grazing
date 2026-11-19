@@ -865,7 +865,7 @@ async function openOutbox() {
           <li class="${i.status}">
             <div class="grow">${escapeHtml(i.label)}
               <div class="muted tiny">Made ${when(i.created)}${i.status === "failed" ? ` · <b>Not sent: ${escapeHtml(i.error || "")}</b>` : ""}</div></div>
-            ${i.status === "failed" ? `<button class="linkbtn" data-drop="${i.id}">Discard</button>` : ""}
+            <button class="linkbtn" data-drop="${i.id}" data-waiting="${i.status === "failed" ? "" : "1"}">Discard</button>
           </li>`).join("")}</ul>` : '<p class="muted small">Nothing waiting.</p>'}
         ${items.some((i) => i.status === "failed") ? '<p class="muted small">A change the server turned down (say the mob had already been merged) is kept here so you can see what it was. Make it again the right way, then discard it.</p>' : ""}
       </div>
@@ -887,7 +887,10 @@ async function openOutbox() {
   if (signIn) signIn.onclick = () => { location.href = "/"; };
   d.querySelectorAll("[data-drop]").forEach((b) => {
     b.onclick = async () => {
-      if (!confirm("Discard this change? It won't be sent.")) return;
+      const msg = b.dataset.waiting
+        ? "Discard this change? It won't be sent.\n\nOnly do this if it's stuck: if it already reached the server, it stays recorded there."
+        : "Discard this change? It won't be sent.";
+      if (!confirm(msg)) return;
       await dropWaiting(b.dataset.drop);
       openOutbox();
     };
