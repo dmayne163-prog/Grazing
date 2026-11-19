@@ -422,6 +422,11 @@ export async function renderAnimalsTab(ctx, el) {
   let seq = 0;
   const load = async () => {
     const mine = ++seq;
+    // No list until you search, or pick a mob or another status: two thousand rows is no use to anyone.
+    if (!f.q && !f.mob && f.status === "onhand") {
+      list.innerHTML = '<p class="muted small">Type a tag, EID or NLIS number to find an animal, or choose a mob or status to list them.</p>';
+      return;
+    }
     const params = new URLSearchParams({ q: f.q, status: f.status, ...(f.mob ? { mob: f.mob } : {}) });
     let r;
     try {
