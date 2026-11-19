@@ -389,7 +389,7 @@ stockApi.get("/mobs/:id/events", (req, res) => {
 
 /** Rest and use for every paddock: the summary behind the paddock list. */
 stockApi.get("/grazing", (_req, res) => {
-  const out = [...paddockHistories().values()].map(({ periods, rests, ...summary }) => summary);
+  const out = [...paddockHistories().values()].map(({ periods, rests, stays, ...summary }) => summary);
   res.json({ records_begin: recordsBegin(), paddocks: out });
 });
 

@@ -413,8 +413,22 @@ export interface GrazingPeriod {
   inferred: boolean;
 }
 
+/** One unbroken stretch with stock in a paddock, every mob counted together. */
+export interface Stay {
+  from: string;
+  to: string | null;
+  days: number;
+  /** Head in the paddock on the first day. */
+  head_in: number;
+  /** The most head in it at once during the stay. */
+  head_max: number;
+  mobs: Array<{ id: number; name: string; owner: string | null }>;
+  inferred: boolean;
+}
+
 export interface PaddockHistory {
   paddock_id: number;
+  stays: Stay[];
   periods: GrazingPeriod[];
   rests: Array<{ from: string; to: string | null; days: number }>;
   occupied: boolean;
@@ -437,8 +451,12 @@ export function paddockHistories(): Map<number, PaddockHistory> {
   const yearAgo = new Date(Date.parse(`${now}T00:00:00Z`) - 365 * DAY_MS).toISOString().slice(0, 10);
 
   const byPaddock = new Map<number, GrazingPeriod[]>();
+  const segsByPaddock = new Map<number, Segment[]>();
   for (const s of allSegments()) {
     for (const pid of s.paddock_ids) {
+      const sl = segsByPaddock.get(pid) ?? [];
+      sl.push(s);
+      segsByPaddock.set(pid, sl);
       const list = byPaddock.get(pid) ?? [];
       const prev = list[list.length - 1];
       const days = daysBetween(s.from, s.to ?? now);
@@ -501,8 +519,26 @@ export function paddockHistories(): Map<number, PaddockHistory> {
       if (to <= from) continue;
       hd += daysBetween(from, to) * (p.head_start + p.head_end) / 2;
     }
+    // Each unbroken stretch with stock in it, all mobs together: how many
+    // went in on the first day, and the most there were at once.
+    const segs = segsByPaddock.get(pid) ?? [];
+    const headOn = (d: string) => segs.reduce((s, g) => s + (g.from <= d && (g.to === null || d < g.to) ? g.head : 0), 0);
+    const stays: Stay[] = spans.map(([from, to]) => {
+      const inside = segs.filter((g) => g.from < (to ?? "9999") && (g.to === null || g.to > from));
+      const dates = [...new Set(inside.map((g) => (g.from > from ? g.from : from)))];
+      const ids = [...new Set(inside.map((g) => g.mob_id))];
+      return {
+        from, to, days: daysBetween(from, to ?? now),
+        head_in: headOn(from),
+        head_max: Math.max(0, ...dates.map(headOn)),
+        mobs: ids.map((id) => ({ id, name: mobs.get(id)?.name ?? `#${id}`, owner: mobs.get(id)?.owner ?? null })),
+        inferred: inside.some((g) => g.inferred),
+      };
+    });
+
     out.set(pid, {
       paddock_id: pid,
+      stays: stays.reverse(),
       periods: periods.reverse(),
       rests: rests.reverse(),
       occupied,

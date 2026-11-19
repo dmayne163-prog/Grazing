@@ -1529,13 +1529,6 @@ function stockHtml(f) {
 
 /* ----------------------------- grazing history ----------------------------- */
 
-/** "12 Nov – 11 Dec 2025", "10 Dec 2025 – 4 Feb 2026", "24 Sept 2026 – now". */
-function span(from, to) {
-  const fy = from.slice(0, 4), ty = to ? to.slice(0, 4) : null;
-  if (!to) return `${shortDay(from)} ${fy} – now`;
-  return fy === ty ? `${shortDay(from)} – ${shortDay(to)} ${ty}` : `${shortDay(from)} ${fy} – ${shortDay(to)} ${ty}`;
-}
-
 async function loadGrazing(f) {
   let data;
   try {
@@ -1559,11 +1552,13 @@ async function loadGrazing(f) {
     ? '<span class="inuse">In use now</span>'
     : `Resting <b>${h.rest_days} days</b>, since ${day(h.last_grazed)}`;
 
-  // Newest first, grazing periods and rests interleaved.
+  // Newest first: each stay (every mob in it together) and the empty spells between.
   const items = [
-    ...h.periods.map((p) => ({ at: p.from, p })),
+    ...h.stays.map((s) => ({ at: s.from, s })),
     ...h.rests.map((r) => ({ at: r.from, r })),
-  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.p ? -1 : 1));
+  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.s ? -1 : 1));
+  const dur = (n) => `${nf0.format(n)} day${n === 1 ? "" : "s"}`;
+  const until = (to) => (to ? day(to) : "now");
 
   const cap = data.capacity;
   const use = cap ? loadText(cap.ae_year, cap.ae) : null;
@@ -1574,15 +1569,12 @@ async function loadGrazing(f) {
         <div class="muted tiny">${cap.land_types.slice(0, 3).map((l) => `${escapeHtml(l.name)} ${Math.round(l.share_pct)}%`).join(" · ")}</div></dd>` : ""}
       <dt>Last 12 months</dt><dd>${h.grazing_days_365} grazing days · ${nf0.format(h.head_days_365)} head-days${area ? ` (${nf0.format(h.head_days_365 / area)} per ha)` : ""}</dd>
     </dl>
-    <ul class="timeline">${items.map(({ p, r }) => p ? `
-      <li class="graze${p.inferred ? " inferred" : ""}">
-        <div class="when">${span(p.from, p.to)}<span class="muted"> · ${p.days} d</span></div>
-        <div><button class="linkbtn" data-mob="${p.mob_id}">${escapeHtml(p.mob_name)}</button>${p.owner ? ` <span class="chip owner">${escapeHtml(p.owner)}</span>` : ""}${p.inferred ? ' <span class="chip inferred" title="Through a gate inferred from the pasture readings to have been open: likely, not recorded at the time">inferred gate</span>' : ""}</div>
-        <div class="muted tiny">${p.head_start === p.head_end ? `${p.head_start} hd` : `${p.head_start} → ${p.head_end} hd`} · ${nf0.format(p.head_days)} head-days${p.shared_with.length ? ` · gates open to ${escapeHtml(p.shared_with.join(", "))}` : ""}</div>
+    <ul class="timeline">${items.map(({ s, r }) => s ? `
+      <li class="graze${s.inferred ? " inferred" : ""}">
+        <div class="when"><b>${nf0.format(s.head_in)} head</b> went in ${day(s.from)} – ${until(s.to)} <span class="muted">(${dur(s.days)})</span>${s.head_max > s.head_in ? ` <span class="muted small">· up to ${nf0.format(s.head_max)} head</span>` : ""}${s.inferred ? ' <span class="chip inferred" title="Through a gate inferred from the pasture readings to have been open: likely, not recorded at the time">inferred gate</span>' : ""}</div>
+        <div class="muted tiny">${s.mobs.map((m) => `<button class="linkbtn" data-mob="${m.id}">${escapeHtml(m.name)}</button>`).join(", ")}</div>
       </li>` : `
-      <li class="rest"><span class="muted">${r.from === data.records_begin && r.to
-        ? `No stock recorded from the start of records (${r.days} d)`
-        : `Rested ${r.days} d${r.to ? "" : " so far"}`}</span></li>`).join("")}
+      <li class="rest"><span class="muted">Empty from ${day(r.from)} to ${until(r.to)} (${dur(r.days)})${r.from === data.records_begin ? " · records begin" : ""}</span></li>`).join("")}
     </ul>
     <p class="muted tiny">Records begin ${day(data.records_begin)}. Head-days use the head count, not weight: AgriWebb's movement report has no weights.</p>`;
   el.querySelectorAll("[data-mob]").forEach((b) => {
