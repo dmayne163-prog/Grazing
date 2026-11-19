@@ -456,8 +456,9 @@ export function openImport(dialog, meta, onDone, { kind = "any", mobId = null } 
           <label class="radio gap-top"><input type="checkbox" id="sWeight" checked> Set the mob's average weight from this session</label>
           <p class="muted tiny" id="sWeightNote"></p>
 
-          <h3>Were they sold?</h3>
-          <label class="radio"><input type="checkbox" id="sSold"> These animals were sold at this session</label>
+          <h3>Did you sell them?</h3>
+          <label class="radio"><input type="checkbox" id="sSold"> We sold these animals at this session — they left the property</label>
+          <p class="muted tiny">Leave this unticked for cattle you bought: choose "A new mob" above for those.</p>
           <div id="sSoldBox" hidden>
             <div class="f"><label for="sTo">Sold to</label><input id="sTo" placeholder="buyer, saleyard or abattoir" autocomplete="off"></div>
             <p class="muted small">Each animal is recorded as sold on the session date, and its history is kept. Mob head counts are
