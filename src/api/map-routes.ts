@@ -12,6 +12,8 @@ import {
   listFeatures, listRevisions, NotFoundError, restoreFeature, splitFeature, toFeature,
   updateFeature, type FeatureInput,
 } from "../map/store.js";
+import { applyTidy, describeShapeProblems, overlapsWith, planTidy, shapeProblems, undoTidy } from "../map/tidy.js";
+import type { MultiPolygon, Polygon } from "geojson";
 import { TILE_SOURCES } from "../tiles/proxy.js";
 import { backupTo, listBackups } from "../db/backup.js";
 import { tmpdir } from "node:os";
@@ -90,10 +92,33 @@ function inputFrom(body: unknown): FeatureInput {
   };
 }
 
+/**
+ * What's worth knowing about a paddock boundary just saved: it crosses or
+ * doubles back on itself, or it overlaps a neighbour. Saved regardless — a
+ * boundary half-way through being fixed is still better kept — but said.
+ */
+function withWarnings(f: ReturnType<typeof toFeature>) {
+  const g = f.geometry;
+  if (f.properties.kind !== "paddock" || (g.type !== "Polygon" && g.type !== "MultiPolygon")) return f;
+  try {
+    const area = g as Polygon | MultiPolygon;
+    const warnings = describeShapeProblems(shapeProblems(area));
+    const over = overlapsWith(f.id, area);
+    if (over.length) {
+      const list = over.slice(0, 3).map((o) => `${o.name || "a paddock"} (${o.overlap_ha < 0.1 ? Math.round(o.overlap_ha * 10_000) + " m²" : o.overlap_ha.toFixed(1) + " ha"})`).join(", ");
+      warnings.push(`It overlaps ${list}${over.length > 3 ? ` and ${over.length - 3} more` : ""}. Tools → Tidy paddock boundaries can fix small overlaps.`);
+    }
+    return warnings.length ? { ...f, warnings } : f;
+  } catch (e) {
+    log.warn("boundary check failed", e);
+    return f;
+  }
+}
+
 mapApi.post("/features", requireAdmin, (req, res) => {
   try {
     const id = createFeature(inputFrom(req.body), "drawn", who(req));
-    res.json(toFeature(getFeature(id)!));
+    res.json(withWarnings(toFeature(getFeature(id)!)));
   } catch (e) { fail(res, e); }
 });
 
@@ -102,7 +127,7 @@ mapApi.put("/features/:id", requireAdmin, (req, res) => {
   const rev = Number((req.body as { rev?: unknown })?.rev);
   if (!id || !Number.isInteger(rev)) { res.status(400).json({ error: "Bad request" }); return; }
   try {
-    res.json(toFeature(updateFeature(id, inputFrom(req.body), rev, who(req))));
+    res.json(withWarnings(toFeature(updateFeature(id, inputFrom(req.body), rev, who(req)))));
   } catch (e) { fail(res, e); }
 });
 
@@ -249,6 +274,30 @@ mapApi.post("/import/:id/commit", requireAdmin, (req, res) => {
     });
     log.info(`${who(req)} imported ${ids.length} shapes from ${row.filename}`);
     res.json({ ok: true, created: ids.length });
+  } catch (e) { fail(res, e); }
+});
+
+/* ------------------------------ boundary tidy ----------------------------- */
+
+mapApi.get("/boundaries/check", requireAdmin, (_req, res) => {
+  try { res.json(planTidy()); } catch (e) { fail(res, e); }
+});
+
+mapApi.post("/boundaries/tidy", requireAdmin, (req, res) => {
+  const revs = ((req.body ?? {}) as { revs?: unknown }).revs;
+  if (!revs || typeof revs !== "object") { res.status(400).json({ error: "Bad request" }); return; }
+  try {
+    const r = applyTidy(revs as Record<string, number>, who(req));
+    log.info(`${who(req)} tidied paddock overlaps: ${r.changed} paddock(s) trimmed`);
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
+mapApi.post("/boundaries/undo-tidy", requireAdmin, (req, res) => {
+  try {
+    const r = undoTidy(who(req));
+    log.info(`${who(req)} undid the paddock tidy-up: ${r.restored} restored`);
+    res.json(r);
   } catch (e) { fail(res, e); }
 });
 

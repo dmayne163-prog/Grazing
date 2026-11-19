@@ -6,6 +6,7 @@ import { downloadTiles, offlineSupported, tilesFor } from "./offline.js";
 import { renderRain } from "./rain.js";
 import { renderPasture, renderPaddockPasture, trendWord } from "./pasture.js";
 import { openGateFinder } from "./gatefinder.js";
+import { openTidy } from "./tidy.js";
 import { loadOptiweigh } from "./optiweighui.js";
 import { openRuminati } from "./ruminati.js";
 import { openRegister } from "./register.js";
@@ -62,6 +63,9 @@ const ctx = {
   startImport: (kind, mobId) => startImport(kind, mobId),
   /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
   refresh: async () => { await loadStock(); render(); },
+  get map() { return farm.map; },
+  /** After paddock boundaries change on the server: reload them and re-render. */
+  reloadMap: async () => { await loadFeatures(); render(); },
 };
 
 /* --------------------------------- format ---------------------------------- */
@@ -396,7 +400,8 @@ async function saveReshape() {
     upsert(saved);
     farm.highlight(saved.id);
     render();
-    toast(saved.properties.area_ha != null ? `Shape saved — now ${ha(saved.properties.area_ha)}` : "Shape saved");
+    const done = saved.properties.area_ha != null ? `Shape saved — now ${ha(saved.properties.area_ha)}` : "Shape saved";
+    toast(saved.warnings ? `${done}. ${saved.warnings.join(" ")}` : done, saved.warnings ? { error: true, ms: 15000 } : {});
   } catch (e) {
     toast(e.message, { error: true });
   }
@@ -620,6 +625,7 @@ function toolsHtml() {
         <button class="btn" data-import="records"><b>Import AgriWebb records…</b><span>Mob list, paddock list, movements, rainfall (.xlsx)</span></button>
         <button class="btn" data-import="pasture"><b>Import a pasture report…</b><span>Cibo Labs PastureKey or Pasture Biomass (.zip), or a FORAGE data file (.csv)</span></button>
         <button class="btn" data-import="optiweigh"><b>Import Optiweigh weights…</b><span>The raw individual data from the Optiweigh portal (.csv)</span></button>
+        <button class="btn" id="openTidy"><b>Tidy paddock boundaries…</b><span>Find paddocks that overlap along a fence, or a boundary that crosses itself, and fix the small overlaps</span></button>
         <button class="btn" id="findGates"><b>Find gates that were probably left open…</b><span>From the pasture readings, for the time before this app (AgriWebb kept no gate records)</span></button>
       </div>
     ` : ""}
@@ -738,6 +744,8 @@ function bindOverview() {
   if (nl) nl.onclick = () => openNlisCheck(ctx);
   const ru = $("#openRuminati", body);
   if (ru) ru.onclick = () => openRuminati(ctx);
+  const td = $("#openTidy", body);
+  if (td) td.onclick = () => openTidy(ctx);
   const fg = $("#findGates", body);
   if (fg) fg.onclick = () => openGateFinder($("#dialog"), {
     toast,
@@ -1223,7 +1231,8 @@ function renderNew(def, geometry) {
       endMode();
       upsert(saved);
       select(saved.id);
-      toast(`Saved ${saved.properties.name || kindLabel(kind).toLowerCase()}`);
+      const done = `Saved ${saved.properties.name || kindLabel(kind).toLowerCase()}`;
+      toast(saved.warnings ? `${done}. ${saved.warnings.join(" ")}` : done, saved.warnings ? { error: true, ms: 15000 } : {});
     } catch (e) {
       toast(e.message, { error: true });
     }
