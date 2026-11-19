@@ -420,6 +420,10 @@ export interface PaddockHistory {
   occupied: boolean;
   last_grazed: string | null;
   rest_days: number | null;
+  /** While in use: days since stock went in, counted from the start of the unbroken stretch with stock in it. */
+  grazed_days: number | null;
+  /** The day that stretch began. */
+  grazed_since: string | null;
   grazing_days_365: number;
   head_days_365: number;
 }
@@ -504,6 +508,8 @@ export function paddockHistories(): Map<number, PaddockHistory> {
       occupied,
       last_grazed: occupied ? now : lastSpan?.[1] ?? null,
       rest_days: occupied ? 0 : lastSpan?.[1] ? daysBetween(lastSpan[1], now) : null,
+      grazed_days: occupied ? daysBetween(lastSpan![0], now) : null,
+      grazed_since: occupied ? lastSpan![0] : null,
       grazing_days_365: gd,
       head_days_365: Math.round(hd),
     });

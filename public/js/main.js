@@ -181,10 +181,21 @@ function restOf(id) {
   if (!g) return state.recordsBegin ? Number.MAX_SAFE_INTEGER : null;
   return g.occupied ? -1 : g.rest_days;
 }
+/** Days stock have been in a paddock that's in use now, or null. */
+function grazedOf(id) {
+  const g = state.grazing.get(id);
+  return g?.occupied ? g.grazed_days ?? null : null;
+}
+function grazedLabel(id) {
+  const g = state.grazing.get(id);
+  const d = grazedOf(id);
+  if (d === null) return "";
+  return `<span class="inuse" title="Stock in since ${day(g.grazed_since)}">${d} d</span>`;
+}
 function restLabel(id) {
   const r = restOf(id);
   if (r === null) return "";
-  if (r === -1) return '<span class="inuse">in use</span>';
+  if (r === -1) return "";
   if (r === Number.MAX_SAFE_INTEGER) return `<span class="muted" title="Not grazed since records began, ${day(state.recordsBegin)}">none recorded</span>`;
   return `${r} d`;
 }
@@ -513,6 +524,7 @@ function paddockTable(paddocks) {
   const { key, dir } = state.sort;
   const head = (f) => state.stock.get(f.id)?.head || 0;
   const val = (f) => key === "ha" ? grazable(f) || 0 : key === "head" ? head(f) : key === "rest" ? restOf(f.id) ?? -2
+    : key === "grazed" ? grazedOf(f.id) ?? -1
     : key === "pasture" ? state.pasture.get(f.id)?.tsdm ?? -1 : key === "type" ? f.properties.subtype || "" : f.properties.name;
   const rows = [...paddocks].sort((a, b) => {
     const x = val(a), y = val(b);
@@ -526,6 +538,7 @@ function paddockTable(paddocks) {
         <th data-sort="type">Use${arrow("type")}</th>
         <th data-sort="ha" class="num">Area${arrow("ha")}</th>
         <th data-sort="head" class="num">Head${arrow("head")}</th>
+        ${state.grazing.size ? `<th data-sort="grazed" class="num" title="Days the stock now in it have been in">Grazed${arrow("grazed")}</th>` : ""}
         ${state.grazing.size ? `<th data-sort="rest" class="num" title="Days since last grazed">Rest${arrow("rest")}</th>` : ""}
         ${state.pasture.size ? `<th data-sort="pasture" class="num" title="Pasture, kg dry matter a hectare (Cibo PastureKey)">Pasture${arrow("pasture")}</th>` : ""}
       </tr></thead>
@@ -535,6 +548,7 @@ function paddockTable(paddocks) {
           <td class="muted">${escapeHtml(f.properties.subtype || "")}${f.properties.props?.crop ? ` · ${escapeHtml(f.properties.props.crop)}` : ""}</td>
           <td class="num">${ha(grazable(f))}</td>
           <td class="num">${head(f) || (state.stock.get(f.id)?.ae_per_ha ? '<span class="muted">shared</span>' : "")}</td>
+          ${state.grazing.size ? `<td class="num">${grazedLabel(f.id)}</td>` : ""}
           ${state.grazing.size ? `<td class="num">${restLabel(f.id)}</td>` : ""}
           ${state.pasture.size ? `<td class="num">${pastureCell(f.id)}</td>` : ""}
         </tr>`).join("")}
@@ -708,7 +722,7 @@ function bindOverview() {
   body.querySelectorAll("th[data-sort]").forEach((th) => {
     th.onclick = () => {
       const k = th.dataset.sort;
-      state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : k === "ha" || k === "head" || k === "rest" ? -1 : 1 };
+      state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : k === "ha" || k === "head" || k === "rest" || k === "grazed" ? -1 : 1 };
       render();
     };
   });
