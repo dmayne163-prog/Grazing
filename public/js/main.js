@@ -1094,19 +1094,22 @@ function featureHtml(f) {
   const inPaddock = p.kind !== "paddock" ? featureAt(state.features, pointOf(f)) : null;
 
   const facts = [];
-  if (p.area_ha != null) facts.push(["Mapped area", ha(p.area_ha)]);
+  // Paddocks leave out the area and when the shape last changed: David finds
+  // them noise there (the area is in the paddock list, the changes in History).
+  const isPaddock = p.kind === "paddock";
+  if (p.area_ha != null && !isPaddock) facts.push(["Mapped area", ha(p.area_ha)]);
   const openTo = p.kind === "paddock" ? state.openGroups?.get(f.id) : null;
   if (openTo?.length) {
     const via = state.gates.filter((g) => g.state === "open" && g.paddocks.includes(f.id)).map((g) => g.name);
     facts.push(["Open to", `<span class="inuse">${openTo.map((id) => escapeHtml(state.byId.get(id)?.properties.name ?? "")).join(", ")}</span>${via.length ? ` <span class="muted">via ${via.map(escapeHtml).join(", ")}</span>` : ""}`]);
   }
   if (props.grazable_ha) facts.push(["Grazable", ha(Number(props.grazable_ha))]);
-  if (props.agriwebb_area_ha) facts.push(["AgriWebb said", ha(Number(props.agriwebb_area_ha))]);
+  if (props.agriwebb_area_ha && !isPaddock) facts.push(["AgriWebb said", ha(Number(props.agriwebb_area_ha))]);
   if (p.length_m != null) facts.push(["Length", km(p.length_m)]);
   if (inPaddock) facts.push(["In paddock", escapeHtml(inPaddock.properties.name)]);
   if (props.capacity_l) facts.push(["Capacity", `${nf0.format(props.capacity_l)} L`]);
   if (!canEdit() && props.crop) facts.push(["Pasture", escapeHtml(props.crop)]);
-  facts.push(["Last changed", when(p.updated_at)]);
+  if (!isPaddock) facts.push(["Last changed", when(p.updated_at)]);
 
   const readOnly = !canEdit()
     ? (props.notes ? `<h3>Notes</h3><p>${escapeHtml(props.notes)}</p>` : "")
@@ -1117,10 +1120,11 @@ function featureHtml(f) {
     <h2>${escapeHtml(p.name || "(unnamed)")}</h2>
     <p class="sub"><span class="swatch" data-colour="${kindColour(p.kind, p.subtype)}"></span>${escapeHtml(kindLabel(p.kind))}${p.subtype ? ` · ${escapeHtml(p.subtype)}` : ""}</p>
     ${isGate(f) ? gatePanelHtml() : ""}
-    <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
+    ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>` : ""}
     ${p.kind === "paddock" ? stockHtml(f) : ""}
     ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture · Cibo PastureKey</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
-    ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>
+    ${p.kind === "paddock" ? `
       <h3>Who was here</h3>
       <div class="row2"><div class="f"><label for="whoDate">On</label><input type="date" id="whoDate" value="${todayIso()}"></div><div></div></div>
       <div id="whoHere"><p class="muted small">Loading…</p></div>` : ""}
