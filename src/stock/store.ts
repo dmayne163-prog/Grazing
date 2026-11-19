@@ -422,6 +422,8 @@ export interface Stay {
   head_in: number;
   /** The most head in it at once during the stay. */
   head_max: number;
+  /** Head that came in after the first day, by date (net of any that left the same day). */
+  arrivals: Array<{ date: string; head: number }>;
   mobs: Array<{ id: number; name: string; owner: string | null }>;
   inferred: boolean;
 }
@@ -523,14 +525,28 @@ export function paddockHistories(): Map<number, PaddockHistory> {
     // went in on the first day, and the most there were at once.
     const segs = segsByPaddock.get(pid) ?? [];
     const headOn = (d: string) => segs.reduce((s, g) => s + (g.from <= d && (g.to === null || d < g.to) ? g.head : 0), 0);
+    // Head the day before: segments are [from, to), so one ending on d was there.
+    const headBefore = (d: string) => segs.reduce((s, g) => s + (g.from < d && (g.to === null || d <= g.to) ? g.head : 0), 0);
     const stays: Stay[] = spans.map(([from, to]) => {
       const inside = segs.filter((g) => g.from < (to ?? "9999") && (g.to === null || g.to > from));
       const dates = [...new Set(inside.map((g) => (g.from > from ? g.from : from)))];
       const ids = [...new Set(inside.map((g) => g.mob_id))];
+      // More cattle coming in part way through: mobs that weren't in this
+      // paddock the day before. A recount or calving in a mob already here is
+      // not an arrival, and neither is a draft inside the paddock, which nets
+      // to nothing on the day (one mob down, a new one up), hence the min.
+      const arrivals = dates.filter((d) => d > from).sort()
+        .map((d) => {
+          const here = new Set(segs.filter((g) => g.from < d && (g.to === null || d <= g.to)).map((g) => g.mob_id));
+          const entering = segs.filter((g) => g.from === d && !here.has(g.mob_id)).reduce((t, g) => t + g.head, 0);
+          return { date: d, head: Math.min(entering, headOn(d) - headBefore(d)) };
+        })
+        .filter((a) => a.head > 0);
       return {
         from, to, days: daysBetween(from, to ?? now),
         head_in: headOn(from),
         head_max: Math.max(0, ...dates.map(headOn)),
+        arrivals,
         mobs: ids.map((id) => ({ id, name: mobs.get(id)?.name ?? `#${id}`, owner: mobs.get(id)?.owner ?? null })),
         inferred: inside.some((g) => g.inferred),
       };

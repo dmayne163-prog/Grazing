@@ -1558,6 +1558,13 @@ async function loadGrazing(f) {
     ...h.rests.map((r) => ({ at: r.from, r })),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.s ? -1 : 1));
   const dur = (n) => `${nf0.format(n)} day${n === 1 ? "" : "s"}`;
+  // ", 234 more on 31 Aug 2026" — the first few; the rest summed up.
+  const arrivalsText = (list) => {
+    if (!list?.length) return "";
+    const shown = list.slice(0, 3).map((a) => `, <b>${nf0.format(a.head)} more</b> on ${day(a.date)}`).join("");
+    const rest = list.slice(3);
+    return rest.length ? `${shown}, ${nf0.format(rest.reduce((t, a) => t + a.head, 0))} more on ${rest.length} later days` : shown;
+  };
   const until = (to) => (to ? day(to) : "now");
 
   const cap = data.capacity;
@@ -1571,7 +1578,7 @@ async function loadGrazing(f) {
     </dl>
     <ul class="timeline">${items.map(({ s, r }) => s ? `
       <li class="graze${s.inferred ? " inferred" : ""}">
-        <div class="when"><b>${nf0.format(s.head_in)} head</b> went in ${day(s.from)} – ${until(s.to)} <span class="muted">(${dur(s.days)})</span>${s.head_max > s.head_in ? ` <span class="muted small">· up to ${nf0.format(s.head_max)} head</span>` : ""}${s.inferred ? ' <span class="chip inferred" title="Through a gate inferred from the pasture readings to have been open: likely, not recorded at the time">inferred gate</span>' : ""}</div>
+        <div class="when"><b>${nf0.format(s.head_in)} head</b> went in ${day(s.from)}${arrivalsText(s.arrivals)} – ${until(s.to)} <span class="muted">(${dur(s.days)})</span>${!s.arrivals?.length && s.head_max > s.head_in ? ` <span class="muted small">· up to ${nf0.format(s.head_max)} head</span>` : ""}${s.inferred ? ' <span class="chip inferred" title="Through a gate inferred from the pasture readings to have been open: likely, not recorded at the time">inferred gate</span>' : ""}</div>
         <div class="muted tiny">${s.mobs.map((m) => `<button class="linkbtn" data-mob="${m.id}">${escapeHtml(m.name)}</button>`).join(", ")}</div>
       </li>` : `
       <li class="rest"><span class="muted">Empty from ${day(r.from)} to ${until(r.to)} (${dur(r.days)})${r.from === data.records_begin ? " · records begin" : ""}</span></li>`).join("")}
