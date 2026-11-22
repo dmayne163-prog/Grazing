@@ -5,7 +5,7 @@ import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db, setSetting } from "../db/database.js";
 import { residual, type GateCandidate, type Outlook, type PlanGroup, type PlanProjection } from "../pasture/model.js";
-import { makePlan, planGroups, planRules, setPlanRules } from "../pasture/plan.js";
+import { FEED_HORIZON, makePlan, planGroups, planRules, setPlanRules } from "../pasture/plan.js";
 import { allSegments, today } from "../stock/store.js";
 import { parseWhen, setGate, StockError } from "../stock/actions.js";
 import { Worker } from "node:worker_threads";
@@ -240,6 +240,7 @@ pastureApi.post(
 );
 
 pastureApi.post("/pasture/import/:id/commit", requireAdmin, (req, res) => {
+  forgetPlan(); // new readings: work the plan out again
   const p = pending.get(String(req.params["id"]));
   if (!p) { res.status(404).json({ error: "That preview has expired. Choose the file again." }); return; }
   pending.delete(String(req.params["id"]));
@@ -293,10 +294,28 @@ pastureApi.put("/pasture/capacity/:id/condition", requireAdmin, express.json(), 
 /* ------------------------------ rotation plan ----------------------------- */
 
 /** For each mob: days left where it is, when to move, and the best paddocks to go to. */
+/**
+ * The projection takes several seconds, and the Rotation tab asks for it every
+ * time the app opens. It only changes when stock moves (the groups), the rules,
+ * the day, or new pasture readings come in, so it's kept until one of those
+ * does, or half an hour passes (for new weather).
+ */
+let planCache: { key: string; at: number; proj: PlanProjection | null } | null = null;
+export function forgetPlan(): void { planCache = null; }
+
 pastureApi.get("/plan", async (_req, res) => {
   const rules = planRules();
   try {
-    const proj = await runJob<PlanProjection | null>({ job: "plan", groups: planGroups(), residual: rules.residual, cap: rules.max_days });
+    const groups = planGroups();
+    // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
+    const cap = Math.max(FEED_HORIZON, rules.max_days);
+    const key = JSON.stringify({ groups, r: rules.residual, cap, d: today() });
+    let proj: PlanProjection | null;
+    if (planCache && planCache.key === key && Date.now() - planCache.at < 30 * 60_000) proj = planCache.proj;
+    else {
+      proj = await runJob<PlanProjection | null>({ job: "plan", groups, residual: rules.residual, cap });
+      planCache = { key, at: Date.now(), proj };
+    }
     if (!proj) { res.json({ ok: false, reason: "No pasture readings yet: import Cibo's PastureKey readings first." }); return; }
     res.json({ ok: true, ...makePlan(proj, rules) });
   } catch (e) {

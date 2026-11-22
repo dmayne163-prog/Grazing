@@ -53,6 +53,47 @@ export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): 
  */
 const notForGrazing = (subtype: string | null) => /management|holding/i.test(subtype ?? "");
 
+/** How far ahead feed is projected, days: past the longest stay, so a margin of spare feed counts. */
+export const FEED_HORIZON = 120;
+
+/**
+ * How the options are scored (David, 23 Nov 2026). Points are roughly days.
+ *  - Feed: days it lasts, up to the longest stay, half from a typical season
+ *    and half from a drier one, so a paddock that only lasts if it rains loses.
+ *  - Margin: feed past the longest stay counts a quarter, up to FEED_HORIZON.
+ *  - Green: up to 15 for the share of the feed that's green (quality).
+ *  - Rest: a tenth of the days rested (poorer country counts less), up to 12.
+ *  - Walk: 5 through one gate, 3 through two, 1.5 through three.
+ * Feed, margin and green all lean on the pasture model, so when the latest
+ * Cibo reading is more than three weeks old they count for less (down to
+ * half at four months), leaving rest and the walk to count for more.
+ */
+const SCORE = { marginShare: 0.25, greenMax: 15, restCap: 120, restUnknown: 60, walk: [0, 5, 3, 1.5] as const, freshDays: 21, staleTo: 0.5, staleOver: 120 };
+const confidenceFor = (ageDays: number | null) =>
+  ageDays === null ? SCORE.staleTo : ageDays <= SCORE.freshDays ? 1 : Math.max(SCORE.staleTo, 1 - (ageDays - SCORE.freshDays) / (SCORE.staleOver - SCORE.freshDays) * (1 - SCORE.staleTo));
+
+/** Gates crossed from one set of paddocks to another, through gates between two paddocks (null if more than 3). */
+function gateHops(gates: Array<{ paddocks: number[] }>) {
+  const next = new Map<number, Set<number>>();
+  for (const g of gates) {
+    const [a, b] = g.paddocks as [number, number];
+    if (!next.has(a)) next.set(a, new Set());
+    if (!next.has(b)) next.set(b, new Set());
+    next.get(a)!.add(b); next.get(b)!.add(a);
+  }
+  return (from: number[], to: number): number | null => {
+    let frontier = new Set(from);
+    const seen = new Set(from);
+    for (let hop = 1; hop <= 3; hop++) {
+      const n = new Set<number>();
+      for (const p of frontier) for (const q of next.get(p) ?? []) if (!seen.has(q)) { seen.add(q); n.add(q); }
+      if (n.has(to)) return hop;
+      frontier = n;
+    }
+    return null;
+  };
+}
+
 const DAY = 86_400_000;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY);
@@ -104,7 +145,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   const gates = listGates().filter((g) => g.paddocks.length === 2);
   // A rest on poorer country counts for less: its pasture grows back more slowly.
   const { weights } = restWeights();
-  const nextDoor = (a: number, b: number) => gates.some((g) => g.paddocks.includes(a) && g.paddocks.includes(b));
+  const hops = gateHops(gates);
 
   const mobs = groups.map((g) => {
     const key = g.key;
@@ -129,18 +170,32 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       .map((o) => {
         const h = hist.get(o.paddock_id);
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
-        const adjacent = g.paddocks.some((p) => nextDoor(p, o.paddock_id));
+        const gatesAway = hops(g.paddocks, o.paddock_id);
+        const adjacent = gatesAway === 1;
         const stay = Math.min(o.days.median, rules.max_days);
         const weight = weights.get(o.paddock_id) ?? 1;
         const restCounts = rest === null ? null : Math.round(rest * weight);
-        // Feed for a full stay counts most, then a long rest, then being next door (less walking).
-        const score = stay + Math.min(restCounts ?? 60, 120) / 10 + (adjacent ? 5 : 0);
         const p = pad.get(o.paddock_id)!;
-        const parts = { feed: stay, rest: Math.round((Math.min(restCounts ?? 60, 120) / 10) * 10) / 10, next_door: adjacent ? 5 : 0 };
+        const age = p.reading ? daysBetween(p.reading.date, now) : null;
+        const confidence = confidenceFor(age);
+        const r1 = (x: number) => Math.round(x * 10) / 10;
+        const greenShare = p.now_green !== null && o.now > 0 ? Math.min(1, p.now_green / o.now) : null;
+        const raw = {
+          feed: (Math.min(o.days.median, rules.max_days) + Math.min(o.days.low, rules.max_days)) / 2,
+          margin: Math.max(0, Math.min(o.days.median, FEED_HORIZON) - rules.max_days) * SCORE.marginShare,
+          green: (greenShare ?? 0) * SCORE.greenMax,
+        };
+        const parts = {
+          feed: r1(raw.feed * confidence), margin: r1(raw.margin * confidence), green: r1(raw.green * confidence),
+          rest: r1(Math.min(restCounts ?? SCORE.restUnknown, SCORE.restCap) / 10),
+          walk: gatesAway === null ? 0 : SCORE.walk[gatesAway] ?? 0,
+        };
+        const score = parts.feed + parts.margin + parts.green + parts.rest + parts.walk;
         return {
           paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
-          parts, rest_known: rest !== null,
+          parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
+          confidence: Math.round(confidence * 100), reading_age: age,
           facts: {
             reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
