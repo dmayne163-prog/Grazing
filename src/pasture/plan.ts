@@ -14,7 +14,8 @@
  */
 import { getSetting, setSetting } from "../db/database.js";
 import { listGates } from "../map/gates.js";
-import { mobViews, paddockHistories, today } from "../stock/store.js";
+import { mobLeaving, mobViews, paddockHistories, today } from "../stock/store.js";
+import { listFeatures } from "../map/store.js";
 import { StockError } from "../stock/actions.js";
 import type { PlanGroup, PlanProjection } from "./model.js";
 import { restWeights } from "./capacity.js";
@@ -69,8 +70,54 @@ export const FEED_HORIZON = 120;
  * half at four months), leaving rest and the walk to count for more.
  */
 const SCORE = { marginShare: 0.25, greenMax: 15, restCap: 120, restUnknown: 60, walk: [0, 5, 3, 1.5] as const, freshDays: 21, staleTo: 0.5, staleOver: 120 };
+/**
+ * The last paddock before a mob leaves (a booked sale): it only needs feed
+ * until the day, spare feed is no use, and being close to the yards counts
+ * most. Feed: up to 20 for lasting until the day in a drier season. Yards:
+ * 20 next to the yards, 12 two gates away, 6 three.
+ */
+const LEAVING = { feedMax: 20, yards: [20, 20, 12, 6] as const };
+
 const confidenceFor = (ageDays: number | null) =>
   ageDays === null ? SCORE.staleTo : ageDays <= SCORE.freshDays ? 1 : Math.max(SCORE.staleTo, 1 - (ageDays - SCORE.freshDays) / (SCORE.staleOver - SCORE.freshDays) * (1 - SCORE.staleTo));
+
+/** Every ring's points of a polygon or multipolygon, as [lon, lat]. */
+function rings(geometry: string): number[][][] {
+  const g = JSON.parse(geometry) as { type: string; coordinates: unknown };
+  if (g.type === "Polygon") return g.coordinates as number[][][];
+  if (g.type === "MultiPolygon") return (g.coordinates as number[][][][]).flat();
+  return [];
+}
+
+/**
+ * The shortest distance between two paddocks' fences, metres (0 if they
+ * touch or overlap at a corner). Flat-earth over a few km is plenty here.
+ */
+function fenceGap(a: number[][][], b: number[][][]): number {
+  const lat0 = (a[0]?.[0]?.[1] ?? 0) * Math.PI / 180;
+  const kx = 111_320 * Math.cos(lat0), ky = 110_540;
+  const xy = (p: number[]) => [p[0]! * kx, p[1]! * ky] as const;
+  const segDist = (p: readonly [number, number], s: readonly [number, number], e: readonly [number, number]) => {
+    const dx = e[0] - s[0], dy = e[1] - s[1];
+    const t = dx || dy ? Math.max(0, Math.min(1, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / (dx * dx + dy * dy))) : 0;
+    return Math.hypot(p[0] - (s[0] + t * dx), p[1] - (s[1] + t * dy));
+  };
+  let best = Infinity;
+  const one = (from: number[][][], to: number[][][]) => {
+    for (const r of from) for (const p of r) {
+      const q = xy(p);
+      for (const ring of to) for (let i = 1; i < ring.length; i++) {
+        best = Math.min(best, segDist(q, xy(ring[i - 1]!), xy(ring[i]!)));
+        if (best === 0) return;
+      }
+    }
+  };
+  one(a, b); one(b, a);
+  return best;
+}
+
+/** A paddock whose fence comes within this of the yards counts as next to them. */
+const NEXT_TO_YARDS_M = 150;
 
 /** Gates crossed from one set of paddocks to another, through gates between two paddocks (null if more than 3). */
 function gateHops(gates: Array<{ paddocks: number[] }>) {
@@ -146,6 +193,40 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   // A rest on poorer country counts for less: its pasture grows back more slowly.
   const { weights } = restWeights();
   const hops = gateHops(gates);
+  // The yards cattle leave from: a mob can name its own, or the holding paddock called Yards.
+  const paddockRows = listFeatures().filter((f) => f.kind === "paddock");
+  const nameOf = (id: number) => pad.get(id)?.name ?? paddockRows.find((f) => f.id === id)?.name ?? `#${id}`;
+  const defaultYards = (paddockRows.find((f) => /holding/i.test(f.subtype ?? "") && /yard/i.test(f.name ?? ""))
+    ?? paddockRows.find((f) => /holding/i.test(f.subtype ?? "")))?.id ?? null;
+  /**
+   * How close a paddock is to the yards: 1 if its fence is within 150 m of
+   * them (or a gate joins them), otherwise 1 + the gates to the nearest such
+   * paddock; null past 3. Yards are often reached along lanes rather than
+   * through a mapped gate, so nearness counts as well as gates.
+   */
+  const yardsCache = new Map<number, { near: Set<number>; gap: Map<number, number> }>();
+  const yardsInfo = (yardsId: number) => {
+    let c = yardsCache.get(yardsId);
+    if (!c) {
+      const y = paddockRows.find((f) => f.id === yardsId);
+      const yr = y ? rings(y.geometry) : [];
+      const gap = new Map<number, number>();
+      for (const f of paddockRows) if (f.id !== yardsId && yr.length) gap.set(f.id, fenceGap(yr, rings(f.geometry)));
+      const near = new Set([...gap].filter(([, d]) => d <= NEXT_TO_YARDS_M).map(([id]) => id));
+      for (const gt of gates) if (gt.paddocks.includes(yardsId)) gt.paddocks.forEach((id) => id !== yardsId && near.add(id));
+      c = { near, gap };
+      yardsCache.set(yardsId, c);
+    }
+    return c;
+  };
+  const yardsHopsOf = (from: number[], yardsId: number): number | null => {
+    const { near } = yardsInfo(yardsId);
+    if (from.includes(yardsId) || from.some((id) => near.has(id))) return from.includes(yardsId) ? 0 : 1;
+    let best: number | null = null;
+    for (const n of near) { const h = hops(from, n); if (h !== null && h < 3 && (best === null || h + 1 < best)) best = h + 1; }
+    return best;
+  };
+  const yardsKm = (id: number, yardsId: number) => { const d = yardsInfo(yardsId).gap.get(id); return d === undefined ? null : Math.round(d / 100) / 10; };
 
   const mobs = groups.map((g) => {
     const key = g.key;
@@ -165,8 +246,32 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     if (daysIn + moveIn < rules.min_days) notes.push(`under the ${rules.min_days}-day minimum stay`);
     if (!left) notes.push("no pasture readings for where it is");
 
+    // Booked to leave: plan only up to the day, and end up near the yards.
+    const bookings = g.views.map((v) => ({ name: v.mob.name, l: mobLeaving(v.mob) }));
+    const booked = bookings.filter((b) => b.l);
+    let leaving: null | { date: string; days: number; note: string | null; yards_id: number | null; yards: string | null; yards_hops_now: number | null; stays: boolean; need: number; last: boolean } = null;
+    if (booked.length && booked.length === bookings.length) {
+      const date = booked.map((b) => b.l!.date).sort().at(-1)!;
+      const days = daysBetween(now, date);
+      if (days < 0) notes.push(`was booked to leave on ${date}: record the sale, or change the date`);
+      else {
+        const yardsId = booked.find((b) => b.l!.yards_id !== null)?.l!.yards_id ?? defaultYards;
+        const hopsNow = yardsId === null ? null : yardsHopsOf(g.paddocks, yardsId);
+        // Already next to the yards with feed to the day: stay, even past the
+        // longest stay, rather than move once more just before they leave.
+        const stays = moveIn >= days || (byFeed !== null && byFeed >= days && hopsNow !== null && hopsNow <= 1);
+        if (stays && daysIn + days > rules.max_days) notes.push(`stays ${daysIn + days - rules.max_days} days past the ${rules.max_days}-day limit: it's next to the yards with feed until it leaves, so that saves a move`);
+        leaving = {
+          date, days, note: booked.map((b) => b.l!.note).find(Boolean) ?? null, yards_id: yardsId, yards: yardsId === null ? null : nameOf(yardsId),
+          yards_hops_now: hopsNow, stays, need: stays ? 0 : days - moveIn, last: stays || days - moveIn <= rules.max_days,
+        };
+      }
+    } else if (booked.length) {
+      for (const b of booked) notes.push(`${b.name} is booked to leave on ${b.l!.date}`);
+    }
+
     const options = (proj.options[key] ?? [])
-      .filter((o) => !occupied.has(o.paddock_id) && !skip.has(o.paddock_id) && o.days.median >= rules.min_days)
+      .filter((o) => !occupied.has(o.paddock_id) && !skip.has(o.paddock_id) && (leaving?.last ? o.days.median >= Math.max(1, leaving.need) : o.days.median >= rules.min_days))
       .map((o) => {
         const h = hist.get(o.paddock_id);
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
@@ -185,17 +290,27 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
           margin: Math.max(0, Math.min(o.days.median, FEED_HORIZON) - rules.max_days) * SCORE.marginShare,
           green: (greenShare ?? 0) * SCORE.greenMax,
         };
-        const parts = {
+        const yardsHops = !leaving?.last || leaving.yards_id == null ? null : yardsHopsOf([o.paddock_id], leaving.yards_id);
+        const yardsFar = !leaving?.last || leaving.yards_id == null ? null : yardsKm(o.paddock_id, leaving.yards_id);
+        const parts = leaving?.last ? {
+          // Leaving: only enough feed to get to the day matters, then the yards.
+          feed: r1(Math.min(1, o.days.low / Math.max(1, leaving.need)) * LEAVING.feedMax * confidence), margin: 0,
+          green: r1(raw.green * confidence),
+          rest: r1(Math.min(restCounts ?? SCORE.restUnknown, SCORE.restCap) / 10),
+          walk: gatesAway === null ? 0 : SCORE.walk[gatesAway] ?? 0,
+          yards: yardsHops === null ? 0 : LEAVING.yards[yardsHops] ?? 0,
+        } : {
           feed: r1(raw.feed * confidence), margin: r1(raw.margin * confidence), green: r1(raw.green * confidence),
           rest: r1(Math.min(restCounts ?? SCORE.restUnknown, SCORE.restCap) / 10),
           walk: gatesAway === null ? 0 : SCORE.walk[gatesAway] ?? 0,
+          yards: 0,
         };
-        const score = parts.feed + parts.margin + parts.green + parts.rest + parts.walk;
+        const score = parts.feed + parts.margin + parts.green + parts.rest + parts.walk + parts.yards;
         return {
           paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
-          confidence: Math.round(confidence * 100), reading_age: age,
+          confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar,
           facts: {
             reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
@@ -212,8 +327,8 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       paddocks: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`), paddock_ids: g.paddocks,
       in_since: since, days_in: daysIn,
       now: cur?.now ?? null, days_left: left,
-      move_by: addDays(now, moveIn), move_in: moveIn, why, notes,
-      suggested: null as null | (typeof options)[number], options: options.slice(0, 6),
+      move_by: addDays(now, leaving?.stays ? leaving.days : moveIn), move_in: leaving?.stays ? leaving.days : moveIn, why, notes, leaving,
+      suggested: null as null | (typeof options)[number], options: leaving?.stays ? [] : options.slice(0, 6),
     };
   }).sort((a, b) => a.move_in - b.move_in);
 

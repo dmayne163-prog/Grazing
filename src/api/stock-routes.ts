@@ -39,7 +39,7 @@ import {
 import {
   createMobWithEvents, EVENT_ORDER, mobViews, paddockHistories, paddockStock, recordsBegin,
   today, updateMob, type EventInput,
-  listMobs,
+  listMobs, LeavingError, mobLeaving,
 } from "../stock/store.js";
 
 const log = logger("stock");
@@ -96,6 +96,7 @@ stockApi.get("/mobs", (req, res) => {
     ae_head: v.ae_head,
     ae_total: v.ae_total,
     agriwebb_ae_head: v.agriwebb_ae_head,
+    leaving: mobLeaving(v.mob),
   })));
 });
 
@@ -103,10 +104,22 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const b = (req.body ?? {}) as Record<string, unknown>;
   const edit: Record<string, unknown> = {};
-  for (const k of ["name", "owner", "sex", "description"]) if (k in b) edit[k] = b[k];
+  for (const k of ["name", "owner", "sex", "description", "leaving"]) if (k in b) edit[k] = b[k];
   const before = Number.isInteger(id) ? mobViews().find((v) => v.mob.id === id)?.mob : undefined;
-  const row = before ? updateMob(id, edit) : null;
+  let row;
+  try {
+    row = before ? updateMob(id, edit) : null;
+  } catch (e) {
+    if (e instanceof LeavingError) { res.status(400).json({ error: e.message }); return; }
+    throw e;
+  }
   if (!row) { res.status(404).json({ error: "No such mob" }); return; }
+  if (before && "leaving" in edit) {
+    const l = mobLeaving(row);
+    const msg = l ? `${who(req)} booked ${row.name} to leave on ${l.date}${l.note ? ` (${l.note})` : ""}` : `${who(req)} cleared the leaving date for ${row.name}`;
+    addEvent({ ts: Date.now(), source: "stock", kind: "mob-leaving", severity: "info", message: msg, value: null });
+    log.info(msg);
+  }
   if (before && before.owner !== row.owner) {
     const what = row.owner ? `agistment, owner ${row.owner}` : "own stock";
     addEvent({

@@ -434,6 +434,72 @@ export function openWeighDialog(ctx, m) {
 /* ------------------------------ head dialogs ------------------------------- */
 
 /** Deaths or a recount: a number, a when, a note. */
+/* ------------------------------ booked to leave ------------------------------ */
+
+const allPaddocks = (ctx) => ctx.state.features.filter((f) => f.properties.kind === "paddock");
+const isHolding = (f) => /holding/i.test(f.properties.subtype || "");
+/** The yards it'll leave from: its own choice, or the holding paddock called Yards. */
+function yardsFor(ctx, l) {
+  const ps = allPaddocks(ctx);
+  return (l.yards_id != null ? ps.find((f) => f.id === l.yards_id) : null)
+    ?? ps.find((f) => isHolding(f) && /yard/i.test(f.properties.name || "")) ?? ps.find(isHolding) ?? null;
+}
+function leavingYards(ctx, l) {
+  const y = yardsFor(ctx, l);
+  return y ? ` · from ${escapeHtml(y.properties.name)}` : "";
+}
+function daysUntil(date) {
+  const n = Math.round((Date.parse(`${date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 86_400_000);
+  return n > 0 ? ` (in ${n} day${n === 1 ? "" : "s"})` : n === 0 ? " (today)" : ` <span class="bad">(${-n} day${n === -1 ? "" : "s"} ago: record the sale, or change the date)</span>`;
+}
+
+/**
+ * When the mob is booked to leave (a sale, say) and from which yards. The
+ * rotation planner then plans only up to that day, and puts the mob in a
+ * paddock close to the yards for its last move.
+ */
+function leavingDialog(ctx, m) {
+  const d = ctx.dialog;
+  const l = m.leaving || {};
+  const ps = allPaddocks(ctx).sort((a, b) => (isHolding(b) - isHolding(a)) || (a.properties.name || "").localeCompare(b.properties.name || ""));
+  const def = yardsFor(ctx, { yards_id: null });
+  const chosen = l.yards_id ?? def?.id ?? "";
+  d.innerHTML = `
+    <div class="dlg narrow">
+      <header><h2>Booked to leave</h2><div class="muted small">${escapeHtml(m.name)} · ${m.head} hd</div></header>
+      <div class="body">
+        <div class="f"><label for="lvDate">Date they leave</label><input id="lvDate" type="date" value="${escapeHtml(l.date || "")}"></div>
+        <div class="f"><label for="lvYards">Leaving from</label>
+          <select id="lvYards">${ps.map((f) => `<option value="${f.id}"${f.id === chosen ? " selected" : ""}>${escapeHtml(f.properties.name || `#${f.id}`)}${isHolding(f) ? " (holding)" : ""}</option>`).join("")}</select></div>
+        <div class="f"><label for="lvNote">What for</label><input id="lvNote" placeholder="e.g. Sale, Roma saleyards" value="${escapeHtml(l.note || "")}" autocomplete="off"></div>
+        <p class="muted small">The Rotation tab will plan only up to this day, and for the last move it picks a paddock close to these yards with enough feed to get there, rather than one with months of feed. Nothing is sold or moved: record the sale as usual when it happens.</p>
+      </div>
+      <footer>
+        ${m.leaving ? '<button class="btn" id="lvClear">Not leaving any more</button>' : ""}
+        <button class="btn" id="lvCancel">Cancel</button><button class="btn primary" id="lvSave">Save</button>
+      </footer>
+    </div>`;
+  if (!d.open) d.showModal();
+  const save = async (leaving, msg) => {
+    try {
+      await send("PATCH", `/api/mobs/${m.id}`, { leaving });
+      d.close();
+      await ctx.refresh();
+      ctx.toast(msg);
+    } catch (e) {
+      showError(d, e.message);
+    }
+  };
+  $("#lvCancel", d).onclick = () => d.close();
+  $("#lvSave", d).onclick = () => {
+    const date = $("#lvDate", d).value;
+    if (!date) { showError(d, "Give the date they leave"); return; }
+    save({ date, yards_id: Number($("#lvYards", d).value) || null, note: $("#lvNote", d).value }, `${m.name} booked to leave on ${day(date)}`);
+  };
+  const clr = $("#lvClear", d);
+  if (clr) clr.onclick = () => save(null, `${m.name} no longer booked to leave`);
+}
+
 function headDialog(ctx, m, { title, field, value, go, path, hint, done }) {
   const d = ctx.dialog;
   d.innerHTML = `
@@ -560,6 +626,7 @@ export function mobPageHtml(ctx, m) {
     <div class="statuscard">
       <div class="big"><b>${m.head} hd</b> · ${where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
       <div class="muted small">${m.in_paddock_since ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
+      ${m.leaving ? `<div class="leavingline">Booked to leave <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` · ${escapeHtml(m.leaving.note)}` : ""}${leavingYards(ctx, m.leaving)}${daysUntil(m.leaving.date)}</div>` : ""}
       ${ctx.canEdit ? `<div class="btns">
         <button class="btn primary" id="mMove">Move…</button>
         <button class="btn" id="mDraft">Draft some off…</button>
@@ -567,6 +634,7 @@ export function mobPageHtml(ctx, m) {
         <button class="btn" id="mDeaths">Deaths…</button>
         <button class="btn" id="mRecount">Recount…</button>
         <button class="btn" id="mMerge">Merge into another mob…</button>
+        <button class="btn" id="mLeaving">${m.leaving ? "Change leaving date…" : "Booked to leave…"}</button>
       </div>
       <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
     </div>
@@ -626,6 +694,7 @@ export function bindMobPage(ctx, m, root) {
     done: (n) => `${m.name} counted at ${n} hd`,
   }));
   $("#mMerge", root)?.addEventListener("click", () => mergeDialog(ctx, m));
+  $("#mLeaving", root)?.addEventListener("click", () => leavingDialog(ctx, m));
   const save = $("#mSave", root);
   if (save) save.onclick = async () => {
     try {

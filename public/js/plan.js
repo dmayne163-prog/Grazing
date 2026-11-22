@@ -50,23 +50,30 @@ function drawRotation(el, ctx, p) {
   const days = (n) => `${nf(n)} day${n === 1 ? "" : "s"}`;
   const padLinks = (m) => m.paddocks.map((name, i) => m.paddock_ids?.[i] != null
     ? `<button class="linkbtn strong" data-pad="${m.paddock_ids[i]}">${escapeHtml(name)}</button>` : `<b>${escapeHtml(name)}</b>`).join(" + ");
-  const due = (m) => (m.move_in <= 0
+  const due = (m) => (m.leaving?.stays ? `leaves <b>${day(m.leaving.date)}</b>`
+    : m.move_in <= 0
     ? '<b class="bad">move now</b>'
     : `move by <b${m.move_in <= 3 ? ' class="warnc"' : ""}>${day(m.move_by)}</b>`);
   const next = (m) => {
+    const lv = m.leaving;
+    if (lv?.stays) return `Stays until it leaves on <b>${day(lv.date)}</b>${lv.note ? ` (${escapeHtml(lv.note)})` : ""}, then off from ${escapeHtml(lv.yards || "the yards")}${lv.yards_hops_now ? ` <span class="muted">· ${walkText(lv.yards_hops_now).replace("next door", "next to the yards")}${lv.yards_hops_now > 1 ? " from the yards" : ""}</span>` : lv.yards_hops_now === null && lv.yards ? ' <span class="muted">· more than 3 gates from the yards</span>' : ""}`;
     const o = m.suggested;
     if (!o) return `<span class="bad">${m.options.length ? "Every paddock with feed is taken by a more urgent mob" : `No empty paddock has ${r.min_days} days of feed`}</span>`;
     const bits = [`${feedDays(o)} days of feed`];
     bits.push(o.rest_days === null ? "rest unknown" : `rested ${days(o.rest_days)}`);
     if (o.gates_away) bits.push(walkText(o.gates_away));
-    return `Next → <button class="linkbtn strong" data-why="${p.mobs.indexOf(m)}:${o.paddock_id}" title="Why this paddock?">${escapeHtml(o.name)} ⓘ</button> <span class="muted">· ${bits.join(" · ")}</span>`;
+    if (lv?.last) {
+      bits[0] = `needs ${days(lv.need)} of feed, has ${feedDays(o)}`;
+      bits.push(o.yards_hops ? `${o.yards_hops === 1 ? "next to" : `${o.yards_hops} gates from`} ${escapeHtml(lv.yards || "the yards")}` : `${o.yards_km != null ? `${o.yards_km} km` : "far"} from ${escapeHtml(lv.yards || "the yards")}`);
+    }
+    return `${lv?.last ? `Last paddock before it leaves ${day(lv.date)} → ` : "Next → "}<button class="linkbtn strong" data-why="${p.mobs.indexOf(m)}:${o.paddock_id}" title="Why this paddock?">${escapeHtml(o.name)} ⓘ</button> <span class="muted">· ${bits.join(" · ")}</span>`;
   };
   el.innerHTML = `
     ${p.mobs.length ? `<ul class="rotlist">${p.mobs.map((m) => `
       <li>
         <div>${padLinks(m)} · ${m.mob_ids.length === 1 ? `<button class="linkbtn" data-mob="${m.mob_ids[0]}">${nf(m.head)} hd</button>` : `${nf(m.head)} hd`}
           · in <b>${days(m.days_in)}</b> · ${due(m)}
-          <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}</div></div>
+          <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}${m.leaving ? ` · <b>leaving ${day(m.leaving.date)}${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}</b>` : ""}${m.notes?.length ? ` · ${m.notes.map(escapeHtml).join("; ")}` : ""}</div></div>
         <div class="small">${next(m)}</div>
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
@@ -111,6 +118,7 @@ function explain(ctx, p, mi, pid, back) {
   const age = rd ? ageDays(rd.date) : null;
   const diff = rd ? o.now - rd.tsdm : null;
   const mm = (n) => `${nf(n)} mm`;
+  const days = (n) => `${nf(n)} day${n === 1 ? "" : "s"}`;
   const rain30 = f.rain_30_median != null
     ? `${mm(f.rain_30)} in the last 30 days, against ${mm(f.rain_30_median)} in a normal year for this time (the median since 1890)${f.rain_30 >= f.rain_30_median * 1.25 ? ", so wetter than usual" : f.rain_30 <= f.rain_30_median * 0.75 ? ", so drier than usual" : ""}.`
     : `${mm(f.rain_30)} in the last 30 days.`;
@@ -127,7 +135,8 @@ function explain(ctx, p, mi, pid, back) {
         <p>${chosen
           ? `<b>${escapeHtml(o.name)}</b> scored highest of the ${m.options.length} paddock${m.options.length === 1 ? "" : "s"} with at least ${r.min_days} days of feed for this mob${ranked[0].paddock_id !== pid ? " that weren't already given to a more urgent mob" : ""}.`
           : `<b>${escapeHtml(o.name)}</b> came ${place}${["st", "nd", "rd"][place - 1] || "th"} of ${m.options.length} for this mob${takenBy.has(pid) ? `, and it's already suggested for <b>${escapeHtml(takenBy.get(pid))}</b>, a more urgent mob` : ""}.`}
-          Score <b>${o.score}</b> = ${o.parts.feed} feed + ${o.parts.margin} spare feed + ${o.parts.green} green + ${o.parts.rest} rest${o.parts.walk ? ` + ${o.parts.walk} walk` : ""}.</p>
+          Score <b>${o.score}</b> = ${o.parts.feed} feed + ${o.parts.margin} spare feed + ${o.parts.green} green + ${o.parts.rest} rest${o.parts.walk ? ` + ${o.parts.walk} walk` : ""}${o.parts.yards ? ` + ${o.parts.yards} near the yards` : ""}.</p>
+        ${m.leaving?.last ? `<p class="note">This mob is booked to leave on <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""} from ${escapeHtml(m.leaving.yards || "the yards")}. It has to move from ${escapeHtml(m.paddocks.join(" + "))} by ${day(m.move_by)}, so this paddock only needs <b>${days(m.leaving.need)}</b> of feed. Spare feed doesn't count, and being close to the yards counts most: next to them adds 20, two gates away 12, three 6.</p>` : ""}
         ${o.confidence < 100 ? `<p class="note warn">The Cibo reading is ${nf(o.reading_age)} days old, so the three parts that rely on the pasture model (feed, spare feed, green) are counted at <b>${o.confidence}%</b>. Rest and the walk count in full, so they carry more weight until new readings come in.</p>` : ""}
         ${(() => { const ties = m.options.filter((x) => x.paddock_id !== pid && x.score === o.score).length;
           return ties ? `<p class="note warn">Tied on ${o.score} with ${ties} other paddock${ties === 1 ? "" : "s"}: they score the same on every count, so the planner can't tell them apart and the pick between them is arbitrary. Treat them as equally good.</p>` : ""; })()}
@@ -136,10 +145,13 @@ function explain(ctx, p, mi, pid, back) {
         <p>About <b>${nf(o.now)} kg/ha</b> there today${f.now_green != null ? ` (${nf(f.now_green)} of it green)` : ""}, on ${nf(o.area_ha)} ha.
           With ${nf(m.ae)} AE that's ${aeHa != null ? `${aeHa.toFixed(2)} AE/ha` : "—"}, each eating about 8 kg of dry matter a day, while the pasture keeps growing with the weather.
           It lasts until it's grazed down to ${nf(r.residual)} kg/ha: <b>${feedDays(o)} days</b> in a typical season and <b>${o.days.low >= FEED_HORIZON ? `${FEED_HORIZON}+` : nf(o.days.low)} days</b> in a drier one (the driest fifth of past seasons).</p>
-        <ul class="small">
+        ${m.leaving?.last ? `<ul class="small">
+          <li><b>Feed (${o.parts.feed}):</b> lasting the ${days(m.leaving.need)} until it leaves, even in a drier season, adds up to 20.</li>
+          <li><b>Near the yards (${o.parts.yards}):</b> ${o.yards_hops === 1 ? `its fence is within 150 m of ${escapeHtml(m.leaving.yards || "the yards")}` : o.yards_hops ? `${o.yards_hops} gates from a paddock next to ${escapeHtml(m.leaving.yards || "the yards")}` : `more than three gates from ${escapeHtml(m.leaving.yards || "the yards")}`}${o.yards_km ? ` (${o.yards_km} km fence to fence)` : ""}.</li>
+        </ul>` : `<ul class="small">
           <li><b>Feed (${o.parts.feed}):</b> days it lasts up to your ${r.max_days}-day longest stay, half from the typical season and half from the drier one, so a paddock that only lasts if it rains scores less.</li>
           <li><b>Spare feed (${o.parts.margin}):</b> each day of typical-season feed past ${r.max_days} days counts a quarter, up to ${FEED_HORIZON} days. It's a safety margin if it turns dry.</li>
-        </ul>
+        </ul>`}
 
         <h3>Pasture: Cibo PastureKey</h3>
         ${rd ? `<p>Last reading <b>${fmtDay(rd.date)}</b>: ${nf(rd.tsdm)} kg/ha${rd.green != null ? ` (${nf(rd.green)} green)` : ""}, ${nf(age)} days ago.
@@ -168,10 +180,10 @@ function explain(ctx, p, mi, pid, back) {
         <p><b>Walk (${o.parts.walk}):</b> ${o.gates_away ? `${o.gates_away === 1 ? "through one gate" : `through ${o.gates_away} gates`} from ${escapeHtml(m.paddocks.join(" + "))}` : `more than three gates from ${escapeHtml(m.paddocks.join(" + "))}, or no gate route mapped`}. One gate adds 5, two add 3, three add 1.5.</p>
 
         <h3>How it compared</h3>
-        <table class="list"><thead><tr><th>Paddock</th><th class="num">Feed</th><th class="num">Spare</th><th class="num">Green</th><th class="num">Rest</th><th class="num">Walk</th><th class="num">Score</th></tr></thead><tbody>
+        <table class="list"><thead><tr><th>Paddock</th><th class="num">Feed</th><th class="num">Spare</th><th class="num">Green</th><th class="num">Rest</th><th class="num">Walk</th>${m.leaving?.last ? '<th class="num">Yards</th>' : ""}<th class="num">Score</th></tr></thead><tbody>
           ${ranked.map((x) => `<tr${x.paddock_id === pid ? ' class="chosen"' : ""}>
             <td><button class="linkbtn${x.paddock_id === pid ? " strong" : ""}" data-why="${mi}:${x.paddock_id}">${escapeHtml(x.name)}</button>${m.suggested?.paddock_id === x.paddock_id ? ' <span class="chip">suggested</span>' : takenBy.has(x.paddock_id) ? `<div class="muted tiny">given to ${escapeHtml(takenBy.get(x.paddock_id))}</div>` : ""}</td>
-            <td class="num">${x.parts.feed}</td><td class="num">${x.parts.margin}</td><td class="num">${x.parts.green}</td><td class="num">${x.parts.rest}</td><td class="num">${x.parts.walk || ""}</td><td class="num"><b>${x.score}</b></td></tr>`).join("")}
+            <td class="num">${x.parts.feed}</td><td class="num">${x.parts.margin}</td><td class="num">${x.parts.green}</td><td class="num">${x.parts.rest}</td><td class="num">${x.parts.walk || ""}</td>${m.leaving?.last ? `<td class="num">${x.parts.yards || ""}</td>` : ""}<td class="num"><b>${x.score}</b></td></tr>`).join("")}
         </tbody></table>
         <p class="muted tiny">Only empty paddocks with at least ${r.min_days} days of feed are offered; the top six are shown.</p>
       </div>
@@ -235,8 +247,9 @@ export async function openPlan(ctx) {
           <section class="planmob">
             <h3>${escapeHtml(m.mob)} <span class="muted small">· ${m.mobs > 1 ? `${m.mobs} mobs together, ` : ""}${nf(m.head)} hd, ${nf(m.ae)} AE${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}</span></h3>
             <p class="small">In <b>${escapeHtml(m.paddocks.join(" + "))}</b>${m.in_since ? ` since ${day(m.in_since)} (${m.days_in} days)` : ""}${m.now !== null ? ` · ${nf(m.now)} kg/ha now` : ""}.
-              ${m.move_in <= 0 ? '<b class="bad">Move now</b>' : `Move by <b>${day(m.move_by)}</b> (${m.move_in} days)`}:
-              ${m.why === "feed" ? `feed down to ${nf(r.residual)} kg/ha` : `the ${r.max_days}-day limit`}.
+              ${m.leaving?.stays ? `Stays until it leaves on <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}, then off from ${escapeHtml(m.leaving.yards || "the yards")}.`
+                : `${m.move_in <= 0 ? '<b class="bad">Move now</b>' : `Move by <b>${day(m.move_by)}</b> (${m.move_in} days)`}:
+              ${m.why === "feed" ? `feed down to ${nf(r.residual)} kg/ha` : `the ${r.max_days}-day limit`}.${m.leaving?.last ? ` Leaves on <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}: the next paddock only needs ${m.leaving.need} days of feed and should be close to ${escapeHtml(m.leaving.yards || "the yards")}.` : ""}`}
               ${m.notes.length ? `<span class="muted">${m.notes.map(escapeHtml).join("; ")}.</span>` : ""}</p>
             ${m.options.length ? `
             <table class="list"><thead><tr><th>Next paddock</th><th class="num">kg/ha now</th><th class="num">Days of feed</th><th class="num">Rested, days</th></tr></thead><tbody>
@@ -244,7 +257,7 @@ export async function openPlan(ctx) {
               ${m.options.filter((o) => !m.suggested || o.paddock_id !== m.suggested.paddock_id).slice(0, 4).map((o) => optRow(o, false, mi)).join("")}
             </tbody></table>
             ${!m.suggested ? '<p class="small bad">Every paddock with a week of feed is already taken by a more urgent mob.</p>' : ""}`
-            : `<p class="small bad">No empty paddock has ${r.min_days} days of feed for this mob above ${nf(r.residual)} kg/ha.</p>`}
+            : m.leaving?.stays ? "" : `<p class="small bad">No empty paddock has ${m.leaving ? m.leaving.need : r.min_days} days of feed for this mob above ${nf(r.residual)} kg/ha.</p>`}
           </section>`).join("")}
         ${p.unplanned?.length ? `<p class="small muted">Not planned (in a management-only or holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
         <p class="muted tiny">Days of feed: until the paddock is grazed down to the residual by this mob, with growth from today's soil water across past seasons — the median, and a drier run in brackets. Worked out up to ${FEED_HORIZON} days ("+" means more than that). Bold is the suggestion: the most urgent mob gets its best paddock first. Rested: days since the paddock was last grazed; on poorer country (FORAGE's carrying capacity) a rest counts for less, as shown under it. Only empty paddocks with pasture readings are offered.</p>

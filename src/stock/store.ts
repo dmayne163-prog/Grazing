@@ -315,6 +315,35 @@ export interface MobEdit {
   owner?: string | null;
   sex?: string | null;
   description?: string | null;
+  /** Booked to leave the property (a sale, say): null clears it. */
+  leaving?: unknown;
+}
+
+/**
+ * When a mob is expected to leave the property, and from which yards. The
+ * rotation planner stops planning past the date, and in the last paddock
+ * favours one close to the yards. Kept in the mob's data, not as an event:
+ * it's a plan, and the sale itself is recorded as usual when it happens.
+ */
+export interface Leaving { date: string; yards_id: number | null; note: string | null }
+
+export function mobLeaving(mob: { data: string }): Leaving | null {
+  const d = (JSON.parse(mob.data) as Record<string, unknown>)["leaving"] as Partial<Leaving> | undefined;
+  if (!d || typeof d.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return null;
+  return { date: d.date, yards_id: Number.isInteger(d.yards_id) ? d.yards_id! : null, note: typeof d.note === "string" && d.note ? d.note : null };
+}
+
+export class LeavingError extends Error {}
+
+function cleanLeaving(v: unknown): Leaving | null {
+  if (v === null || v === "" ) return null;
+  const o = (v ?? {}) as Record<string, unknown>;
+  const date = String(o["date"] ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new LeavingError("Give the date the cattle are booked to leave");
+  const y = o["yards_id"] === null || o["yards_id"] === undefined || o["yards_id"] === "" ? null : Number(o["yards_id"]);
+  if (y !== null && !Number.isInteger(y)) throw new LeavingError("Choose the yards they'll leave from");
+  const note = typeof o["note"] === "string" && o["note"].trim() ? o["note"].trim().slice(0, 120) : null;
+  return { date, yards_id: y, note };
 }
 
 /**
@@ -332,9 +361,14 @@ export function updateMob(id: number, edit: MobEdit): MobRow | null {
     ? (["female", "male", "steer", "stag"].includes(String(edit.sex)) ? String(edit.sex) : null)
     : cur.sex;
   const description = edit.description !== undefined ? text(edit.description, 2000) : cur.description;
+  const data = JSON.parse(cur.data) as Record<string, unknown>;
+  if (edit.leaving !== undefined) {
+    const l = cleanLeaving(edit.leaving);
+    if (l) data["leaving"] = l; else delete data["leaving"];
+  }
   db.prepare(
-    "UPDATE mobs SET name = ?, owner = ?, sex = ?, description = ?, updated_at = ? WHERE id = ?"
-  ).run(name, owner, sex, description, Date.now(), id);
+    "UPDATE mobs SET name = ?, owner = ?, sex = ?, description = ?, data = ?, updated_at = ? WHERE id = ?"
+  ).run(name, owner, sex, description, JSON.stringify(data), Date.now(), id);
   return db.prepare("SELECT * FROM mobs WHERE id = ?").get(id) as MobRow;
 }
 

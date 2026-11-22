@@ -682,3 +682,5 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .why h3{margin-top:16px}
 .why ul{margin:4px 0 0;padding-left:18px}
 .why li{margin:3px 0}
+
+.leavingline{margin-top:4px;font-size:13px;color:var(--warn)}
