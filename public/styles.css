@@ -34,6 +34,13 @@
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,"Cascadia Mono","Consolas","SF Mono","Roboto Mono",monospace;
 
+  --chart-axis:#3A464C;
+  --on-accent:#06222F;
+  --overlay:rgba(21,26,29,.92);
+  --attrib-bg:rgba(12,16,18,.7);
+  --map-bg:#10161a;
+  color-scheme:dark;
+
   --top-h:52px;
   /* Wide on a desktop, but always leaving the map at least 45% of the screen. */
   --panel-w:min(800px, 55vw);
@@ -106,11 +113,11 @@ button{cursor:pointer}
    is actually visible. On a phone the panel is a sheet over the map instead. */
 /* Its own stacking layer, so Leaflet's controls (z-index up to 1000) can't draw
    over the panel where the two overlap on a phone. */
-#map{position:absolute;top:0;left:0;bottom:0;right:var(--panel-w);background:#10161a;z-index:0}
+#map{position:absolute;top:0;left:0;bottom:0;right:var(--panel-w);background:var(--map-bg);z-index:0}
 
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{
-  background:rgba(12,16,18,.7) !important;
+  background:var(--attrib-bg) !important;
   color:var(--ink-3) !important;
   font-size:10px;
 }
@@ -148,7 +155,7 @@ button{cursor:pointer}
   box-shadow:0 2px 8px rgba(0,0,0,.35);
 }
 .tools button:hover{border-color:var(--accent)}
-.tools button[aria-pressed="true"]{background:var(--accent);color:#06222F;border-color:var(--accent)}
+.tools button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 
 .mapbtns{
   position:absolute;left:10px;top:92px;z-index:900;
@@ -167,7 +174,7 @@ button{cursor:pointer}
 .where{
   position:absolute;left:calc((100% - var(--panel-w)) / 2);bottom:18px;transform:translateX(-50%);
   z-index:900;
-  background:rgba(21,26,29,.92);
+  background:var(--overlay);
   border:1px solid var(--line);border-radius:999px;
   padding:6px 14px;font-size:13px;
   white-space:nowrap;max-width:calc(100% - var(--panel-w) - 24px);overflow:hidden;text-overflow:ellipsis;
@@ -186,7 +193,7 @@ button{cursor:pointer}
   max-width:min(560px, calc(100% - var(--panel-w) - 24px));
 }
 .modebar span{flex:1;min-width:0}
-.modebar button.primary,button.primary{background:var(--accent);color:#06222F;border-color:var(--accent)}
+.modebar button.primary,button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 
 /* ---------------------------------- panel ---------------------------------- */
 
@@ -312,7 +319,7 @@ table.list td.num,table.list th.num{text-align:right;font-variant-numeric:tabula
   padding:8px 12px;font-weight:600;font-size:13px;
 }
 .btn:hover:not([disabled]){border-color:var(--accent)}
-.btn.primary{background:var(--accent);color:#06222F;border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .btn.danger{color:var(--crit)}
 .btn.danger:hover{border-color:var(--crit)}
 .btn[disabled]{opacity:.5;cursor:not-allowed}
@@ -480,7 +487,7 @@ label.radio{display:flex;align-items:center;gap:7px;font-size:14px;text-transfor
 dialog .dlg.narrow{max-width:460px}
 dialog:has(.dlg.narrow){width:min(460px, calc(100vw - 24px))}
 .f input[type="date"],.f input[type="time"],.row2 input[type="date"],.row2 input[type="time"]{
-  background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;color-scheme:dark;width:100%;
+  background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;
 }
 .history .grow{flex:1}
 .history li{align-items:flex-start}
@@ -631,3 +638,47 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .note-item .linkbtn{margin-left:8px;font-size:12px}
 .note-photo{display:block;max-width:100%;max-height:260px;border-radius:8px;margin-top:6px}
 .newmob{margin:4px 0 8px 26px;padding:8px 10px;border-left:2px solid var(--line-soft)}
+
+/* Light mode: the same layout on a pale page, for bright sun or by preference.
+   The map itself (imagery and its markers) is unchanged. */
+:root[data-theme="light"]{
+  --bg:#F3F1EC;
+  --surface:#FFFFFF;
+  --surface-2:#F0EEE8;
+  --line:#D3CFC5;
+  --line-soft:#E6E3DB;
+  --ink:#1B2023;
+  --ink-2:#4A565C;
+  --ink-3:#6B777D;
+
+  --good:#1C7F4F;
+  --warn:#9A6200;
+  --crit:#BB3427;
+  --accent:#1B6FA3;
+
+  --good-bg:rgba(28,127,79,.11);
+  --warn-bg:rgba(154,98,0,.12);
+  --crit-bg:rgba(187,52,39,.10);
+
+  --chart-axis:#B5B0A5;
+  --on-accent:#FFFFFF;
+  --overlay:rgba(255,255,255,.94);
+  --attrib-bg:rgba(255,255,255,.75);
+  --map-bg:#DCE3E0;
+  color-scheme:light;
+}
+:root[data-theme="light"] .planmob tr.chosen td{background:var(--good-bg)}
+
+/* Rotation tab: two lines for each paddock in use. */
+.rotlist{list-style:none;margin:8px 0 0;padding:0}
+.rotlist li{padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.rotlist li > div + div{margin-top:3px}
+.linkbtn.strong{font-weight:650}
+.warnc{color:var(--warn)}
+.themebtn{font-size:13px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:4px 11px;margin-left:4px}
+.themebtn:hover{border-color:var(--accent)}
+
+/* "Why this paddock" explanation */
+.why h3{margin-top:16px}
+.why ul{margin:4px 0 0;padding-left:18px}
+.why li{margin:3px 0}

@@ -16,8 +16,16 @@ import { escapeHtml, localGet, localSet } from "./map.js";
 const GAUGE = "#3E9AC9";
 const SILO = "#d95926";
 const MEDIAN = "#75848B"; // a reference mark, not a series: the muted ink
-const SURFACE = "#151A1D";
-const GRID = "#1F282C", AXIS = "#3A464C", TICK_TEXT = "#75848B", INK = "#E7EEF0";
+let SURFACE = "#151A1D";
+let GRID = "#1F282C", AXIS = "#3A464C", TICK_TEXT = "#75848B", INK = "#E7EEF0";
+/** Chart colours follow the app's light or dark mode: read them when a chart is drawn. */
+function themeColours() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, d) => cs.getPropertyValue(n).trim() || d;
+  GRID = v("--line-soft", GRID); AXIS = v("--chart-axis", AXIS); TICK_TEXT = v("--ink-3", TICK_TEXT); INK = v("--ink", INK);
+  SURFACE = v("--surface", SURFACE);
+}
+
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const monthLabel = (m, style = "short") =>
@@ -288,6 +296,7 @@ function bindForm(el, gauge, toast, done) {
 // attributes. Every chart has a hover/tap tooltip and a table view beside it.
 
 function frame(host, W, H, label) {
+  themeColours();
   const svg = document.createElementNS(SVGNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("width", "100%");

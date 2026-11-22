@@ -136,9 +136,15 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         // Feed for a full stay counts most, then a long rest, then being next door (less walking).
         const score = stay + Math.min(restCounts ?? 60, 120) / 10 + (adjacent ? 5 : 0);
         const p = pad.get(o.paddock_id)!;
+        const parts = { feed: stay, rest: Math.round((Math.min(restCounts ?? 60, 120) / 10) * 10) / 10, next_door: adjacent ? 5 : 0 };
         return {
           paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
+          parts, rest_known: rest !== null,
+          facts: {
+            reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
+            rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
+          },
         };
       })
       .sort((a, b) => b.score - a.score);
@@ -148,7 +154,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       key, mob_ids: g.views.map((v) => v.mob.id),
       mob: g.views.map((v) => v.mob.name).join(" + "), mobs: g.views.length, owner: owners.join(", ") || null,
       head: g.views.reduce((t, v) => t + v.state.head, 0), ae: Math.round(g.views.reduce((t, v) => t + aeOf(v), 0)),
-      paddocks: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`),
+      paddocks: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`), paddock_ids: g.paddocks,
       in_since: since, days_in: daysIn,
       now: cur?.now ?? null, days_left: left,
       move_by: addDays(now, moveIn), move_in: moveIn, why, notes,

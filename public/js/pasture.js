@@ -12,8 +12,16 @@ import { openCapacity } from "./capacity.js";
 // Validated on the dark surface (#151A1D) beside the SILO orange: lightness
 // band, chroma, colour-blind separation and 3:1 contrast all pass.
 const PASTURE = "#199e70";
-const REF = "#A3B1B7"; // the district reference: a neutral, not a series hue
-const GRID = "#1F282C", AXIS = "#3A464C", TICK_TEXT = "#75848B", INK = "#E7EEF0";
+let REF = "#A3B1B7"; // the district reference: a neutral, not a series hue
+let GRID = "#1F282C", AXIS = "#3A464C", TICK_TEXT = "#75848B", INK = "#E7EEF0", SURFACE = "#151A1D";
+/** Chart colours follow the app's light or dark mode: read them when a chart is drawn. */
+function themeColours() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, d) => cs.getPropertyValue(n).trim() || d;
+  GRID = v("--line-soft", GRID); AXIS = v("--chart-axis", AXIS); TICK_TEXT = v("--ink-3", TICK_TEXT); INK = v("--ink", INK);
+  SURFACE = v("--surface", SURFACE); REF = v("--ink-2", REF); GRAZED = REF;
+}
+
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const fmtDay = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
@@ -98,6 +106,7 @@ async function loadLongTerm(host, ctx) {
 }
 
 function svgFrame(host, W, H, label) {
+  themeColours();
   const svg = document.createElementNS(SVGNS, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("width", "100%");
@@ -349,13 +358,13 @@ function drawPasture(host, rows) {
 
   const last = rows[rows.length - 1];
   if (last.p50 !== null) {
-    add("circle", { cx: x(last.date), cy: y(last.p50), r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2 });
+    add("circle", { cx: x(last.date), cy: y(last.p50), r: 4, fill: PASTURE, stroke: SURFACE, "stroke-width": 2 });
     add("text", { x: x(last.date) - 6, y: y(last.p50) - 8, "text-anchor": "end", "font-size": 10, fill: INK }).textContent = Math.round(last.p50).toLocaleString("en-AU");
   }
 
   // Crosshair: the nearest reading to the pointer.
   const cross = add("line", { x1: 0, x2: 0, y1: pad.t, y2: pad.t + plotH, stroke: AXIS, "stroke-width": 1, visibility: "hidden" });
-  const dot = add("circle", { r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2, visibility: "hidden" });
+  const dot = add("circle", { r: 4, fill: PASTURE, stroke: SURFACE, "stroke-width": 2, visibility: "hidden" });
   add("rect", { x: pad.l, y: pad.t, width: plotW, height: plotH, fill: "transparent" });
 
   host.innerHTML = "";
@@ -460,7 +469,7 @@ const shiftDays = (d, n) => {
   return x.toISOString().slice(0, 10);
 };
 
-const GRAZED = "#A3B1B7";
+let GRAZED = "#A3B1B7";
 
 function drawPaddockPasture(host, rows, periods, ol = null) {
   if (!host) return;
@@ -538,11 +547,11 @@ function drawPaddockPasture(host, rows, periods, ol = null) {
 
   add("path", { d: path(rows.map((r) => [x(r.date), y(r.tsdm)])), fill: "none", stroke: PASTURE, "stroke-width": 2, "stroke-linejoin": "round" });
   const lr = rows[rows.length - 1];
-  add("circle", { cx: x(lr.date), cy: y(lr.tsdm), r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2 });
+  add("circle", { cx: x(lr.date), cy: y(lr.tsdm), r: 4, fill: PASTURE, stroke: SURFACE, "stroke-width": 2 });
   if (!fan.length) add("text", { x: x(lr.date) - 6, y: y(lr.tsdm) - 8, "text-anchor": "end", "font-size": 10, fill: INK }).textContent = Math.round(lr.tsdm).toLocaleString("en-AU");
 
   const cross = add("line", { x1: 0, x2: 0, y1: pad.t, y2: pad.t + plotH, stroke: AXIS, "stroke-width": 1, visibility: "hidden" });
-  const dot = add("circle", { r: 4, fill: PASTURE, stroke: "#151A1D", "stroke-width": 2, visibility: "hidden" });
+  const dot = add("circle", { r: 4, fill: PASTURE, stroke: SURFACE, "stroke-width": 2, visibility: "hidden" });
   add("rect", { x: pad.l, y: pad.t, width: plotW, height: plotH, fill: "transparent" });
 
   host.innerHTML = "";

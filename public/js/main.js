@@ -14,7 +14,7 @@ import { openMovements } from "./movements.js";
 import { conditionText, loadText } from "./capacity.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
-import { openPlan } from "./plan.js";
+import { forgetRotation, openPlan, renderRotation } from "./plan.js";
 import { loadNotes, notesSectionHtml } from "./notes.js";
 import { flush as sendWaiting, list as outboxList, onChange as onOutboxChange, remove as dropWaiting, startSending, syncState } from "./outbox.js";
 import { MobLayer } from "./moblayer.js";
@@ -29,7 +29,7 @@ const state = {
   features: [],
   byId: new Map(),
   selectedId: null,
-  tab: localGet("tab") || "paddocks",
+  tab: localGet("tab") || "rotation",
   sort: { key: "name", dir: 1 },
   /** null when idle; otherwise what the map is being used for. */
   mode: null,
@@ -62,7 +62,7 @@ const ctx = {
   backToMobs: () => { state.selectedMobId = null; state.selectedAnimalId = null; state.tab = state.tab === "animals" ? "animals" : "mobs"; render(); },
   startImport: (kind, mobId) => startImport(kind, mobId),
   /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
-  refresh: async () => { await loadStock(); render(); },
+  refresh: async () => { forgetRotation(); await loadStock(); render(); },
   get map() { return farm.map; },
   /** After paddock boundaries change on the server: reload them and re-render. */
   reloadMap: async () => { await loadFeatures(); render(); },
@@ -487,7 +487,7 @@ function overviewHtml() {
   const agist = agistHead(state.mobs);
 
   const tabs = [
-    ["paddocks", "Paddocks"], ["mobs", "Mobs"], ["animals", "Animals"], ["pasture", "Pasture"], ["rain", "Rain"], ["water", "Water"], ["layers", "Layers"], ["tools", "Tools"],
+    ["rotation", "Rotation"], ["paddocks", "Paddocks"], ["mobs", "Mobs"], ["animals", "Animals"], ["pasture", "Pasture"], ["rain", "Rain"], ["water", "Water"], ["layers", "Layers"], ["tools", "Tools"],
   ];
 
   let content = "";
@@ -499,6 +499,7 @@ function overviewHtml() {
 
   if (state.tab === "paddocks") content += paddockTable(paddocks);
   if (state.tab === "mobs") content += mobsTable();
+  if (state.tab === "rotation") content += `<div id="rotationTab"><p class="muted small">Loading…</p></div>`;
   if (state.tab === "pasture") content += `<div id="pastureTab"><p class="muted small">Loading…</p></div>`;
   if (state.tab === "rain") content += `<div id="rainTab"><p class="muted small">Loading…</p></div>`;
   if (state.tab === "animals") content += `<div id="animalsTab"></div>`;
@@ -706,6 +707,8 @@ function bindOverview() {
   const body = $("#panelBody");
   const rainEl = $("#rainTab", body);
   if (rainEl) renderRain(rainEl, { canEdit: canEdit(), toast });
+  const rotationEl = $("#rotationTab", body);
+  if (rotationEl) renderRotation(rotationEl, ctx);
   const pastureEl = $("#pastureTab", body);
   if (pastureEl) renderPasture(pastureEl, ctx);
   const animalsEl = $("#animalsTab", body);
@@ -1418,6 +1421,18 @@ async function start() {
   $("#panelBody").addEventListener("click", () => {
     if (!sheetOpen() && matchMedia("(max-width:760px)").matches) openSheet(true);
   });
+  // Light or dark mode (theme.js sets it before the page draws).
+  const themeBtn = $("#themeBtn");
+  const themeLabel = () => { themeBtn.textContent = window.grazingTheme?.get() === "light" ? "☾ Dark" : "☀ Light"; };
+  if (themeBtn && window.grazingTheme) {
+    themeLabel();
+    themeBtn.onclick = () => {
+      window.grazingTheme.set(window.grazingTheme.get() === "light" ? "dark" : "light");
+      themeLabel();
+      render(); // charts pick up the new colours when redrawn
+    };
+  } else if (themeBtn) themeBtn.hidden = true;
+
   $("#signOut").onclick = async () => {
     try { await send("POST", "/api/auth/logout"); } finally { location.href = "/"; }
   };

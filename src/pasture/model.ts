@@ -788,7 +788,24 @@ export interface PlanProjection {
   current: Record<string, { now: number | null; days: { low: number; median: number } | null }>;
   /** For each group, each paddock it could go to: pasture now and days of grazing there alone. */
   options: Record<string, Array<{ paddock_id: number; now: number; days: { low: number; median: number } }>>;
-  paddocks: Array<{ id: number; name: string; subtype: string | null; area_ha: number; now: number | null; last_reading: string | null }>;
+  paddocks: Array<{ id: number; name: string; subtype: string | null; area_ha: number; now: number | null; last_reading: string | null } & PlanFacts>;
+}
+
+/** What went into a paddock's figures, so the planner can explain a suggestion. */
+export interface PlanFacts {
+  /** The latest Cibo PastureKey reading: total and green, kg/ha. */
+  reading: { date: string; tsdm: number; green: number | null } | null;
+  now_green: number | null;
+  /** The fitted growth multiplier for this paddock (soil, land condition); 1 is the district average. */
+  multiplier: number | null;
+  /** SILO rain at the paddock's grid point, mm: since the reading, and the last 30 days with the median for those 30 days since 1890. */
+  rain_since_reading: number | null;
+  rain_30: number;
+  rain_30_median: number | null;
+  /** Plant-available soil water now, % of what the soil can hold. */
+  soil_water_pct: number;
+  /** Rain over the planning window ahead in past seasons, mm: the median and a drier run. */
+  rain_ahead: { days: number; median: number; low: number };
 }
 
 /**
@@ -833,6 +850,41 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
     return Math.round(ps.reduce((t, p) => t + total(today.get(p.id)!) * p.area, 0) / area);
   };
 
+  // Rain and soil water at each grid point, shared by its paddocks.
+  const cellFacts = new Map<string, { rainSince: (day: number) => number; rain30: number; median30: number | null; soil: number; ahead: { days: number; median: number; low: number } }>();
+  for (const [cell, w] of inp.weather) {
+    const sum = (a: number, b: number) => { let t = 0; for (let d = a; d <= b; d++) t += w.rain[d - w.start] ?? 0; return t; };
+    const lw = ctx.longWeather.get(cell)!;
+    const md = isoOf(inp.end).slice(4).replace("-02-29", "-02-28");
+    const past: number[] = [];
+    for (let y = 1890; y < ctx.lastYear; y++) {
+      const e = dayNo(`${y}${md}`) - lw.start;
+      if (e - 29 < 0) continue;
+      let t = 0; for (let i = e - 29; i <= e; i++) t += lw.rain[i] ?? 0;
+      past.push(t);
+    }
+    const ahead = scen.get(cell)!.map((dr) => { let t = 0; for (let d = 0; d < Math.min(cap, dr.R.length); d++) t += dr.R[d]!; return t; });
+    cellFacts.set(cell, {
+      rainSince: (day) => Math.round(sum(day + 1, inp.end)),
+      rain30: Math.round(sum(inp.end - 29, inp.end)),
+      median30: past.length ? Math.round(pct(past, 0.5)) : null,
+      soil: Math.round((ctx.hist.get(cell)!.W / WMAX) * 100),
+      ahead: { days: cap, median: Math.round(pct(ahead, 0.5)), low: Math.round(pct(ahead, 0.2)) },
+    });
+  }
+  const factsFor = (p: Paddock): PlanFacts => {
+    const c = cellFacts.get(p.cell)!;
+    const last = p.obs[p.obs.length - 1] ?? null;
+    const st = today.get(p.id);
+    return {
+      reading: last ? { date: isoOf(last.day), tsdm: Math.round(last.tsdm), green: last.green === null ? null : Math.round(last.green) } : null,
+      now_green: st ? Math.round(st[0]!) : null,
+      multiplier: ctx.fit?.multipliers.has(p.id) ? round(ctx.fit.multipliers.get(p.id)!, 2) : null,
+      rain_since_reading: last ? c.rainSince(last.day) : null,
+      rain_30: c.rain30, rain_30_median: c.median30, soil_water_pct: c.soil, rain_ahead: c.ahead,
+    };
+  };
+
   const current: PlanProjection["current"] = {};
   const options: PlanProjection["options"] = {};
   for (const g of groups) {
@@ -852,6 +904,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
       id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1),
       now: today.has(p.id) ? Math.round(total(today.get(p.id)!)) : null,
       last_reading: p.obs.length ? isoOf(p.obs[p.obs.length - 1]!.day) : null,
+      ...factsFor(p),
     })),
   };
 }
