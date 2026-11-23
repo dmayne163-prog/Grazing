@@ -21,12 +21,13 @@ import type { PlanGroup, PlanProjection } from "./model.js";
 import { restWeights } from "./capacity.js";
 import { DEFAULT_READY_DAYS, latestPlantings } from "./plantings.js";
 
-export interface PlanRules { residual: number; min_days: number; max_days: number }
+/** min_head: smaller mobs (a few cows, a sick heifer) are left out of the plan. */
+export interface PlanRules { residual: number; min_days: number; max_days: number; min_head: number }
 
 export function planRules(): PlanRules {
   const s = getSetting("plan_rules");
   const r = s ? (JSON.parse(s) as Partial<PlanRules>) : {};
-  return { residual: r.residual ?? 1200, min_days: r.min_days ?? 7, max_days: r.max_days ?? 42 };
+  return { residual: r.residual ?? 1200, min_days: r.min_days ?? 7, max_days: r.max_days ?? 42, min_head: r.min_head ?? 20 };
 }
 
 export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): PlanRules {
@@ -41,6 +42,7 @@ export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): 
     residual: num(input.residual, 200, 5000, "The residual") ?? cur.residual,
     min_days: num(input.min_days, 1, 60, "The shortest stay") ?? cur.min_days,
     max_days: num(input.max_days, 7, 180, "The longest stay") ?? cur.max_days,
+    min_head: num(input.min_head, 1, 1000, "The smallest mob planned") ?? cur.min_head,
   };
   if (next.min_days > next.max_days) throw new StockError("The shortest stay can't be longer than the longest");
   setSetting("plan_rules", JSON.stringify(next));
@@ -184,7 +186,14 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   const pad = new Map(proj.paddocks.map((p) => [p.id, p]));
   const skip = new Set(proj.paddocks.filter((p) => notForGrazing(p.subtype)).map((p) => p.id));
   const all = together();
-  const groups = all.filter((g) => g.paddocks.some((id) => !skip.has(id)));
+  const headOf = (g: (typeof all)[number]) => g.views.reduce((t, v) => t + v.state.head, 0);
+  // Small mobs (under min_head, all the stock in their paddocks together) are
+  // left out: they don't hold a paddock, and aren't given one.
+  const small = all.filter((g) => g.paddocks.some((id) => !skip.has(id)) && headOf(g) < rules.min_head).map((g) => ({
+    mob: g.views.map((v) => v.mob.name).join(" + "), head: headOf(g),
+    where: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`).join(" + "),
+  }));
+  const groups = all.filter((g) => g.paddocks.some((id) => !skip.has(id)) && headOf(g) >= rules.min_head);
   const unplanned = all.filter((g) => !g.paddocks.some((id) => !skip.has(id))).map((g) => ({
     mob: g.views.map((v) => v.mob.name).join(" + "), head: g.views.reduce((t, v) => t + v.state.head, 0),
     where: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`).join(" + "),
@@ -454,5 +463,5 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   }
   for (const m of mobs) (m as { all_options?: unknown }).all_options = undefined;
 
-  return { as_of: proj.as_of, rules, mobs, unplanned, not_ready: notReady };
+  return { as_of: proj.as_of, rules, mobs, unplanned, small, not_ready: notReady };
 }

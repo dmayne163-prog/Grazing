@@ -105,9 +105,10 @@ function drawRotation(el, ctx, p) {
         ${m.rotation ? `<div class="muted tiny">Rotates around ${m.rotation.names.map(escapeHtml).join(", ")}${m.rotation.outside ? ' · <b class="warnc">none free with feed: suggesting outside it</b>' : ""}${m.short_from ? ` · <b class="warnc">no other paddock in it has enough feed for this mob by ${day(m.short_from)}</b>` : ""}</div>` : ""}
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
     ${p.not_ready?.length ? `<p class="small">Crops not ready to graze yet (only suggested for a mob moving on or after the day they're ready): ${p.not_ready.map((c) => `<button class="linkbtn strong" data-pad="${c.paddock_id}">${escapeHtml(c.name)}</button> <span class="muted">(${escapeHtml(c.crop)}, planted ${day(c.sown_on)})</span> ready <b>${day(c.ready_on)}</b>`).join("; ")}.</p>` : ""}
+    ${p.small?.length ? `<p class="small muted">Not planned, under ${r.min_head} hd: ${p.small.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     <div class="btns"><button class="btn" id="rotFull">Full planner: other options and why…</button></div>
-    <p class="muted tiny">Most urgent first. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, Cibo readings come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
+    <p class="muted tiny">Most urgent first. Mobs of ${r.min_head ?? 20} hd or more. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, Cibo readings come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
   el.querySelectorAll("[data-pad]").forEach((b) => { b.onclick = () => ctx.select(Number(b.dataset.pad), { zoom: true }); });
   el.querySelectorAll("[data-mob]").forEach((b) => { b.onclick = () => ctx.selectMob(Number(b.dataset.mob)); });
   el.querySelector("#rotFull").onclick = () => openPlan(ctx);
@@ -259,7 +260,7 @@ export async function openPlan(ctx) {
     <div class="dlg wide report">
       <header>
         <h2>Rotation planner</h2>
-        <div class="muted small">Weather to ${escapeHtml(p.as_of)}. Leave at least <b>${nf(r.residual)} kg/ha</b>; stay <b>${r.min_days}–${r.max_days} days</b> in a paddock.
+        <div class="muted small">Weather to ${escapeHtml(p.as_of)}. Leave at least <b>${nf(r.residual)} kg/ha</b>; stay <b>${r.min_days}–${r.max_days} days</b> in a paddock; mobs of <b>${r.min_head ?? 20} hd</b> or more.
           ${ctx.canEdit ? '<button class="linkbtn" id="plRules">Change</button>' : ""}</div>
       </header>
       <div class="body">
@@ -270,8 +271,9 @@ export async function openPlan(ctx) {
           </div>
           <div class="row2">
             <div class="f"><label for="plMax">Longest stay, days</label><input id="plMax" type="number" value="${r.max_days}"></div>
-            <div class="f"><label>&nbsp;</label><button class="btn primary" id="plSave">Save and replan</button></div>
+            <div class="f"><label for="plHead">Smallest mob planned, head</label><input id="plHead" type="number" min="1" value="${r.min_head ?? 20}"></div>
           </div>
+          <div class="btns"><button class="btn primary" id="plSave">Save and replan</button></div>
         </div>
         ${p.mobs.map((m, mi) => `
           <section class="planmob">
@@ -289,6 +291,7 @@ export async function openPlan(ctx) {
             ${!m.suggested ? '<p class="small bad">Every paddock with a week of feed is already taken by a more urgent mob.</p>' : ""}`
             : m.leaving?.stays ? "" : `<p class="small bad">No empty paddock has ${m.leaving ? m.leaving.need : r.min_days} days of feed for this mob above ${nf(r.residual)} kg/ha.</p>`}
           </section>`).join("")}
+        ${p.small?.length ? `<p class="small muted">Not planned, under ${r.min_head} hd: ${p.small.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}. Their paddocks can be suggested to other mobs.</p>` : ""}
         ${p.unplanned?.length ? `<p class="small muted">Not planned (in a management-only or holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
         <p class="muted tiny">Days of feed: until the paddock is grazed down to the residual by this mob, with growth from today's soil water across past seasons — the median, and a drier run in brackets. Worked out up to ${FEED_HORIZON} days ("+" means more than that). Bold is the suggestion: the most urgent mob gets its best paddock first. Rested: days since the paddock was last grazed; on poorer country (FORAGE's carrying capacity) a rest counts for less, as shown under it. Only empty paddocks with pasture readings are offered.</p>
       </div>
@@ -301,7 +304,7 @@ export async function openPlan(ctx) {
   const sv = d.querySelector("#plSave");
   if (sv) sv.onclick = async () => {
     try {
-      await send("PUT", "/api/plan/rules", { residual: d.querySelector("#plRes").value, min_days: d.querySelector("#plMin").value, max_days: d.querySelector("#plMax").value });
+      await send("PUT", "/api/plan/rules", { residual: d.querySelector("#plRes").value, min_days: d.querySelector("#plMin").value, max_days: d.querySelector("#plMax").value, min_head: d.querySelector("#plHead").value });
       forgetRotation();
       openPlan(ctx);
     } catch (e) {
