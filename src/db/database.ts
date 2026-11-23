@@ -481,6 +481,25 @@ CREATE TABLE IF NOT EXISTS report_presets (
   updated_at INTEGER NOT NULL
 );
 
+-- Crops planted on the cultivation paddocks: when, what, the seeding and
+-- fertiliser rates, and when it's ready to graze. The rotation planner leaves
+-- a paddock out until its newest planting is ready.
+CREATE TABLE IF NOT EXISTS plantings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  feature_id  INTEGER NOT NULL,
+  sown_on     TEXT    NOT NULL,
+  crop        TEXT    NOT NULL,
+  rate_kg_ha  REAL,
+  fertiliser  TEXT,
+  ready_on    TEXT,
+  note        TEXT,
+  username    TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  deleted_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_plantings_feature ON plantings(feature_id, sown_on);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

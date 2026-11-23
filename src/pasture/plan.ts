@@ -19,6 +19,7 @@ import { listFeatures } from "../map/store.js";
 import { StockError } from "../stock/actions.js";
 import type { PlanGroup, PlanProjection } from "./model.js";
 import { restWeights } from "./capacity.js";
+import { DEFAULT_READY_DAYS, latestPlantings } from "./plantings.js";
 
 export interface PlanRules { residual: number; min_days: number; max_days: number }
 
@@ -240,6 +241,21 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     for (const n of near) { const h = hops(from, n); if (h !== null && h < 3 && (best === null || h + 1 < best)) best = h + 1; }
     return best;
   };
+  // A crop not ready to graze yet is left out until it is. With no ready date
+  // given, it's taken as about 8 weeks after planting.
+  const plantings = latestPlantings();
+  const readyOn = (id: number) => {
+    const p = plantings.get(id);
+    return p ? p.ready_on ?? addDays(p.sown_on, DEFAULT_READY_DAYS) : null;
+  };
+  const plantingOf = (id: number) => {
+    const p = plantings.get(id);
+    return p ? { crop: p.crop, sown_on: p.sown_on, rate_kg_ha: p.rate_kg_ha, fertiliser: p.fertiliser, ready_on: readyOn(id)!, ready_guessed: !p.ready_on } : null;
+  };
+  const notReady = [...plantings.keys()]
+    .filter((id) => readyOn(id)! > now && !skip.has(id))
+    .map((id) => ({ paddock_id: id, name: nameOf(id), ...plantingOf(id)! }))
+    .sort((a, b) => a.ready_on.localeCompare(b.ready_on));
   const yardsKm = (id: number, yardsId: number) => { const d = yardsInfo(yardsId).gap.get(id); return d === undefined ? null : Math.round(d / 100) / 10; };
 
   const mobs = groups.map((g) => {
@@ -295,8 +311,10 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       for (const b of booked) notes.push(`${b.name} is booked to leave on ${niceDay(b.l!.date)}`);
     }
 
+    // The day it would go in: a crop ready by then can be suggested.
+    const goesIn = addDays(now, moveIn);
     const options = (proj.options[key] ?? [])
-      .filter((o) => !occupied.has(o.paddock_id) && !skip.has(o.paddock_id) && (leaving?.last ? o.days.median >= Math.max(1, leaving.need) : o.days.median >= rules.min_days))
+      .filter((o) => !occupied.has(o.paddock_id) && !skip.has(o.paddock_id) && (readyOn(o.paddock_id) ?? "") <= goesIn && (leaving?.last ? o.days.median >= Math.max(1, leaving.need) : o.days.median >= rules.min_days))
       .map((o) => {
         const h = hist.get(o.paddock_id);
         const rest = h ? (h.occupied ? 0 : h.rest_days) : null;
@@ -336,6 +354,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
           confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar, yards_access: access.get(o.paddock_id) ?? null,
+          planting: plantingOf(o.paddock_id),
           facts: {
             reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
@@ -364,5 +383,5 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     m.suggested = pick;
     if (pick) taken.add(pick.paddock_id);
   }
-  return { as_of: proj.as_of, rules, mobs, unplanned };
+  return { as_of: proj.as_of, rules, mobs, unplanned, not_ready: notReady };
 }

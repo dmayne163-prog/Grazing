@@ -87,6 +87,7 @@ function drawRotation(el, ctx, p) {
           <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}${m.leaving ? ` · <b>${m.leaving.head_staying ? `${nf(m.leaving.head_leaving)} hd ` : ""}leaving ${day(m.leaving.date)}${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}</b>` : ""}${m.notes?.length ? ` · ${m.notes.map(escapeHtml).join("; ")}` : ""}</div></div>
         <div class="small">${next(m)}</div>
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
+    ${p.not_ready?.length ? `<p class="small">Crops not ready to graze yet (only suggested for a mob moving on or after the day they're ready): ${p.not_ready.map((c) => `<button class="linkbtn strong" data-pad="${c.paddock_id}">${escapeHtml(c.name)}</button> <span class="muted">(${escapeHtml(c.crop)}, planted ${day(c.sown_on)})</span> ready <b>${day(c.ready_on)}</b>`).join("; ")}.</p>` : ""}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     <div class="btns"><button class="btn" id="rotFull">Full planner: other options and why…</button></div>
     <p class="muted tiny">Most urgent first. Leave ${nf(r.residual)} kg/ha, stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, Cibo readings come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
@@ -169,6 +170,7 @@ function explain(ctx, p, mi, pid, back) {
           Since then the model has grown and grazed it day by day with the actual rain and weather, giving ${nf(o.now)} kg/ha today (${diff >= 0 ? "+" : "−"}${nf(Math.abs(diff))}).</p>
           ${age > 21 ? `<p class="note warn">That reading is ${nf(age)} days old, so today's figure leans on the model more than usual. New PastureKey readings would firm it up.</p>` : ""}`
           : '<p class="muted">No PastureKey reading for this paddock.</p>'}
+        ${o.planting ? `<p class="small">Planted to <b>${escapeHtml(o.planting.crop)}</b> on ${fmtDay(o.planting.sown_on)}${o.planting.rate_kg_ha != null ? ` at ${o.planting.rate_kg_ha} kg/ha` : ""}${o.planting.fertiliser ? `, ${escapeHtml(o.planting.fertiliser)}` : ""}; ready to graze from ${fmtDay(o.planting.ready_on)}${o.planting.ready_guessed ? " (taken as 8 weeks after planting)" : ""}.</p>` : ""}
         <p><b>Green (${o.parts.green}):</b> ${o.green_share != null ? `${nf(o.green_share)}% of the feed is green today` : "green share unknown"}. Green feed is better quality, so it adds up to 15 points.</p>
         ${f.multiplier != null ? `<p class="small muted">This paddock grows about ${f.multiplier.toFixed(2)}× the district average, fitted from its past Cibo readings (soil, land condition, cultivation).</p>` : ""}
 
@@ -196,7 +198,7 @@ function explain(ctx, p, mi, pid, back) {
             <td><button class="linkbtn${x.paddock_id === pid ? " strong" : ""}" data-why="${mi}:${x.paddock_id}">${escapeHtml(x.name)}</button>${m.suggested?.paddock_id === x.paddock_id ? ' <span class="chip">suggested</span>' : takenBy.has(x.paddock_id) ? `<div class="muted tiny">given to ${escapeHtml(takenBy.get(x.paddock_id))}</div>` : ""}</td>
             <td class="num">${x.parts.feed}</td><td class="num">${x.parts.margin}</td><td class="num">${x.parts.green}</td><td class="num">${x.parts.rest}</td><td class="num">${x.parts.walk || ""}</td>${m.leaving?.last ? `<td class="num">${x.parts.yards || ""}</td>` : ""}<td class="num"><b>${x.score}</b></td></tr>`).join("")}
         </tbody></table>
-        <p class="muted tiny">Only empty paddocks with at least ${r.min_days} days of feed are offered; the top six are shown.</p>
+        <p class="muted tiny">Only empty paddocks with at least ${r.min_days} days of feed are offered, and not a crop that won't be ready to graze by ${day(m.move_by)}; the top six are shown.</p>
       </div>
       <footer class="btns">
         ${back ? '<button class="btn" id="whyBack">← Back to the planner</button>' : ""}
