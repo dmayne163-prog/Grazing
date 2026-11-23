@@ -39,7 +39,7 @@ import {
 import {
   createMobWithEvents, EVENT_ORDER, mobViews, paddockHistories, paddockStock, recordsBegin,
   today, updateMob, type EventInput,
-  listMobs, LeavingError, mobLeaving,
+  listMobs, LeavingError, mobLeaving, mobRotation,
 } from "../stock/store.js";
 
 const log = logger("stock");
@@ -101,6 +101,7 @@ stockApi.get("/mobs", (req, res) => {
     ae_total: v.ae_total,
     agriwebb_ae_head: v.agriwebb_ae_head,
     leaving: mobLeaving(v.mob),
+    rotation: mobRotation(v.mob),
   })));
 });
 
@@ -108,7 +109,7 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
   const id = Number(req.params["id"]);
   const b = (req.body ?? {}) as Record<string, unknown>;
   const edit: Record<string, unknown> = {};
-  for (const k of ["name", "owner", "sex", "description", "leaving"]) if (k in b) edit[k] = b[k];
+  for (const k of ["name", "owner", "sex", "description", "leaving", "rotation"]) if (k in b) edit[k] = b[k];
   const view = Number.isInteger(id) ? mobViews().find((v) => v.mob.id === id) : undefined;
   const before = view?.mob;
   const lh = (edit["leaving"] as { head?: unknown } | null | undefined)?.head;
@@ -124,6 +125,14 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
     throw e;
   }
   if (!row) { res.status(404).json({ error: "No such mob" }); return; }
+  if (before && "rotation" in edit) {
+    const r = mobRotation(row);
+    const { byId } = paddockIndex();
+    addEvent({
+      ts: Date.now(), source: "stock", kind: "mob-rotation", severity: "info", value: null,
+      message: r ? `${who(req)} set ${row.name} to rotate around ${r.paddock_ids.map((id) => byId.get(id)?.row.name ?? `#${id}`).join(", ")}` : `${who(req)} cleared the rotation for ${row.name}`,
+    });
+  }
   if (before && "leaving" in edit) {
     const l = mobLeaving(row);
     const msg = l ? `${who(req)} booked ${l.head ? `${l.head} hd of ` : ""}${row.name} to leave on ${l.date}${l.note ? ` (${l.note})` : ""}` : `${who(req)} cleared the leaving date for ${row.name}`;

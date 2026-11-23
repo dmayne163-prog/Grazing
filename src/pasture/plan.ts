@@ -14,7 +14,7 @@
  */
 import { getSetting, setSetting } from "../db/database.js";
 import { listGates } from "../map/gates.js";
-import { mobLeaving, mobViews, paddockHistories, today } from "../stock/store.js";
+import { mobLeaving, mobRotation, mobViews, paddockHistories, today } from "../stock/store.js";
 import { listFeatures } from "../map/store.js";
 import { StockError } from "../stock/actions.js";
 import type { PlanGroup, PlanProjection } from "./model.js";
@@ -311,6 +311,9 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       for (const b of booked) notes.push(`${b.name} is booked to leave on ${niceDay(b.l!.date)}`);
     }
 
+    // The paddocks it rotates around, if set: suggestions come from those.
+    const rotIds = [...new Set(g.views.flatMap((v) => mobRotation(v.mob)?.paddock_ids ?? []))];
+    const rotSet = new Set(rotIds);
     // The day it would go in: a crop ready by then can be suggested.
     const goesIn = addDays(now, moveIn);
     const options = (proj.options[key] ?? [])
@@ -362,6 +365,16 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         };
       })
       .sort((a, b) => b.score - a.score);
+    // Kept to its rotation, unless it's leaving (the last paddock is about the
+    // yards) or none of its paddocks will do: then the best of the rest, flagged.
+    let rotOutside = false;
+    let chosen = options;
+    if (rotSet.size && !leaving?.last) {
+      const inGroup = options.filter((o) => rotSet.has(o.paddock_id));
+      if (inGroup.length) chosen = inGroup;
+      else { rotOutside = true; notes.push("none of its rotation paddocks is free with enough feed, so these are from outside it"); }
+    }
+    const rotation = rotSet.size ? { paddock_ids: rotIds, names: rotIds.map(nameOf), outside: rotOutside } : null;
 
     const owners = [...new Set(g.views.map((v) => v.mob.owner).filter(Boolean))];
     return {
@@ -372,7 +385,11 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       in_since: since, days_in: daysIn,
       now: cur?.now ?? null, days_left: left,
       move_by: addDays(now, leaving?.stays ? leaving.days : moveIn), move_in: leaving?.stays ? leaving.days : moveIn, why, notes, leaving,
-      suggested: null as null | (typeof options)[number], options: leaving?.stays ? [] : options.slice(0, 6),
+      suggested: null as null | (typeof options)[number], options: leaving?.stays ? [] : chosen.slice(0, 6),
+      rotation, all_options: proj.options[key] ?? [], leave_on: leaving?.date ?? null,
+      pattern: [] as Array<{ paddock_id: number; name: string; from: string; to: string }>,
+      /** Set when its rotation runs out of paddocks with enough feed: the day it would need one. */
+      short_from: null as string | null,
     };
   }).sort((a, b) => a.move_in - b.move_in);
 
@@ -383,5 +400,55 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     m.suggested = pick;
     if (pick) taken.add(pick.paddock_id);
   }
+  // The next few moves for each mob, roughly: so the map can show where each
+  // is heading and in what order. Each stop lasts as long as its feed (as
+  // projected today) up to the longest stay; a paddock is only used by one mob
+  // at a time; rest counts from now to the day it would go in.
+  const busy = new Map<number, Array<[string, string]>>();
+  const book = (id: number, a: string, b: string) => { const l = busy.get(id) ?? []; l.push([a, b]); busy.set(id, l); };
+  const free = (id: number, a: string, b: string) => !(busy.get(id) ?? []).some(([x, y]) => a < y && x < b);
+  for (const m of mobs) for (const id of m.paddock_ids) book(id, now, m.move_by);
+  const stayOf = (d: { median: number }) => Math.max(rules.min_days, Math.min(d.median, rules.max_days));
+  for (const m of mobs) {
+    const o = m.suggested;
+    if (!o) continue;
+    const to = addDays(m.move_by, stayOf(o.days));
+    m.pattern.push({ paddock_id: o.paddock_id, name: o.name, from: m.move_by, to });
+    book(o.paddock_id, m.move_by, to);
+  }
+  const horizon = addDays(now, FEED_HORIZON);
+  for (let round = 0; round < 3; round++) {
+    const order = mobs.filter((m) => m.pattern.length === round + 1 && !m.leaving?.last)
+      .sort((a, b) => a.pattern.at(-1)!.to.localeCompare(b.pattern.at(-1)!.to));
+    for (const m of order) {
+      const last = m.pattern.at(-1)!;
+      const start = last.to;
+      if (start > horizon || (m.leave_on && start >= m.leave_on)) continue;
+      const rot = new Set(m.rotation?.paddock_ids ?? []);
+      const used = new Set([...m.paddock_ids, ...m.pattern.map((s) => s.paddock_id)]);
+      const pick = (allowUsed: boolean) => m.all_options
+        .filter((c) => !skip.has(c.paddock_id) && (!rot.size || rot.has(c.paddock_id)) && (allowUsed || !used.has(c.paddock_id))
+          && c.paddock_id !== last.paddock_id && (readyOn(c.paddock_id) ?? "") <= start && c.days.median >= rules.min_days
+          && free(c.paddock_id, start, addDays(start, stayOf(c.days))))
+        .map((c) => {
+          const h = hist.get(c.paddock_id);
+          // A paddock used earlier in this pattern has only rested since it was left.
+          const leftAt = m.pattern.filter((s) => s.paddock_id === c.paddock_id).at(-1)?.to;
+          const rested = leftAt ? daysBetween(leftAt, start) : (h ? (h.occupied ? 0 : h.rest_days ?? SCORE.restUnknown) : SCORE.restUnknown) + daysBetween(now, start);
+          const gates = hops([last.paddock_id], c.paddock_id);
+          const score = (Math.min(c.days.median, rules.max_days) + Math.min(c.days.low, rules.max_days)) / 2
+            + Math.min(rested, SCORE.restCap) / 10 + (gates === null ? 0 : SCORE.walk[gates] ?? 0);
+          return { c, score };
+        })
+        .sort((a, b) => b.score - a.score)[0];
+      const best = pick(false) ?? (rot.size ? pick(true) : undefined);
+      if (!best) { if (rot.size) m.short_from = start; continue; }
+      const to = addDays(start, stayOf(best.c.days));
+      m.pattern.push({ paddock_id: best.c.paddock_id, name: nameOf(best.c.paddock_id), from: start, to });
+      book(best.c.paddock_id, start, to);
+    }
+  }
+  for (const m of mobs) (m as { all_options?: unknown }).all_options = undefined;
+
   return { as_of: proj.as_of, rules, mobs, unplanned, not_ready: notReady };
 }

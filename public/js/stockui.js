@@ -521,6 +521,65 @@ function leavingDialog(ctx, m) {
   if (clr) clr.onclick = () => save(null, `${m.name} no longer booked to leave`);
 }
 
+/**
+ * The paddocks a mob rotates around: the Rotation tab only suggests from these
+ * (by its usual rules), and the map's rotation layer fills them in the mob's colour.
+ */
+function rotationDialog(ctx, m) {
+  const d = ctx.dialog;
+  const cur = new Set(m.rotation?.paddock_ids ?? []);
+  const ps = allPaddocks(ctx)
+    .filter((f) => !isHolding(f) && f.properties.subtype !== "management only")
+    .sort((a, b) => (a.properties.name || "").localeCompare(b.properties.name || "", "en", { numeric: true }));
+  const ha = (f) => Number(f.properties.props?.grazable_ha) || f.properties.area_ha || 0;
+  d.innerHTML = `
+    <div class="dlg narrow">
+      <header><h2>Rotation paddocks</h2><div class="muted small">${escapeHtml(m.name)} · ${m.head} hd${m.ae_total ? ` · ${Math.round(m.ae_total)} AE` : ""}</div></header>
+      <div class="body">
+        <p class="small">Tick the paddocks this mob rotates around. The Rotation tab will only suggest these, picking the next one by the usual rules (feed, rest, rain, walk). Leave them all unticked to let it use any paddock.</p>
+        <div class="checklist" id="rtList">${ps.map((f) => `
+          <label class="radio"><input type="checkbox" value="${f.id}"${cur.has(f.id) ? " checked" : ""}> ${escapeHtml(f.properties.name)}
+            <span class="muted">${Math.round(ha(f))} ha${f.properties.subtype === "cultivation" ? " · cultivation" : ""}</span></label>`).join("")}
+        </div>
+        <p class="small" id="rtSum"></p>
+        <div class="f"><label for="rtNote">Note</label><input id="rtNote" value="${escapeHtml(m.rotation?.note || "")}" placeholder="optional, e.g. breeders stay on the scrub country" autocomplete="off"></div>
+      </div>
+      <footer>
+        ${m.rotation ? '<button class="btn" id="rtClear">No rotation</button>' : ""}
+        <button class="btn" id="rtCancel">Cancel</button><button class="btn primary" id="rtSave">Save</button>
+      </footer>
+    </div>`;
+  const ticked = () => [...d.querySelectorAll("#rtList input:checked")].map((c) => Number(c.value));
+  const sum = () => {
+    const ids = ticked();
+    const area = ids.reduce((t, id) => t + ha(ps.find((f) => f.id === id)), 0);
+    $("#rtSum", d).innerHTML = ids.length
+      ? `${ids.length} paddock${ids.length === 1 ? "" : "s"}, ${Math.round(area).toLocaleString("en-AU")} ha${m.ae_total && area ? ` · ${(area / m.ae_total).toFixed(1)} ha per AE for this mob now` : ""}`
+      : '<span class="muted">None ticked: any paddock.</span>';
+  };
+  d.querySelectorAll("#rtList input").forEach((c) => { c.onchange = sum; });
+  sum();
+  const save = async (rotation, msg) => {
+    try {
+      await send("PATCH", `/api/mobs/${m.id}`, { rotation });
+      d.close();
+      await ctx.refresh();
+      ctx.toast(msg);
+    } catch (e) {
+      showError(d, e.message);
+    }
+  };
+  $("#rtCancel", d).onclick = () => d.close();
+  $("#rtSave", d).onclick = () => {
+    const ids = ticked();
+    if (ids.length === 1) { showError(d, "Tick at least two paddocks, or none for any paddock"); return; }
+    save(ids.length ? { paddock_ids: ids, note: $("#rtNote", d).value } : null,
+      ids.length ? `${m.name} rotates around ${ids.length} paddocks` : `${m.name} can go to any paddock`);
+  };
+  $("#rtClear", d)?.addEventListener("click", () => save(null, `${m.name} can go to any paddock`));
+  d.showModal();
+}
+
 function headDialog(ctx, m, { title, field, value, go, path, hint, done }) {
   const d = ctx.dialog;
   d.innerHTML = `
@@ -655,6 +714,7 @@ export function mobPageHtml(ctx, m) {
     <div class="statuscard">
       <div class="big"><b>${m.head} hd</b> · ${m.unaccounted ? '<b class="warnc">Unaccounted for</b>' : where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
       ${m.unaccounted ? `<div class="small">${unaccountedText(m)}</div>` : ""}
+      ${m.rotation ? `<div class="small">Rotates around ${m.rotation.paddock_ids.map((id) => escapeHtml(paddockName(ctx, id))).join(", ")}${m.rotation.note ? ` · <span class="muted">${escapeHtml(m.rotation.note)}</span>` : ""}</div>` : ""}
       <div class="muted small">${m.in_paddock_since && !m.unaccounted ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
       ${m.leaving ? `<div class="leavingline">${m.leaving.head && m.leaving.head < m.head ? `<b>${m.leaving.head} of ${m.head} hd</b> booked` : "Booked"} to leave <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` · ${escapeHtml(m.leaving.note)}` : ""}${leavingYards(ctx, m.leaving)}${daysUntil(m.leaving.date)}</div>` : ""}
       ${ctx.canEdit ? `<div class="btns">
@@ -665,6 +725,7 @@ export function mobPageHtml(ctx, m) {
         <button class="btn" id="mRecount">Recount…</button>
         <button class="btn" id="mMerge">Merge into another mob…</button>
         <button class="btn" id="mLeaving">${m.leaving ? "Change leaving date…" : "Booked to leave…"}</button>
+        <button class="btn" id="mRotation">Rotation paddocks…</button>
       </div>
       <p class="muted tiny">${m.unaccounted
         ? "When they turn up, use Found them… to put them in the paddock they were found in. If only some turn up, use Draft some off… for those."
@@ -727,6 +788,7 @@ export function bindMobPage(ctx, m, root) {
   }));
   $("#mMerge", root)?.addEventListener("click", () => mergeDialog(ctx, m));
   $("#mLeaving", root)?.addEventListener("click", () => leavingDialog(ctx, m));
+  $("#mRotation", root)?.addEventListener("click", () => rotationDialog(ctx, m));
   const save = $("#mSave", root);
   if (save) save.onclick = async () => {
     try {

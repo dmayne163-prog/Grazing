@@ -14,7 +14,8 @@ import { openMovements } from "./movements.js";
 import { conditionText, loadText } from "./capacity.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
-import { forgetRotation, openPlan, renderRotation } from "./plan.js";
+import { forgetRotation, getPlan, openPlan, renderRotation } from "./plan.js";
+import { PlanLayer, colourOf, planMobs } from "./planlayer.js";
 import { loadNotes, notesSectionHtml } from "./notes.js";
 import { loadPlantings, plantingsSectionHtml } from "./plantings.js";
 import { flush as sendWaiting, list as outboxList, onChange as onOutboxChange, remove as dropWaiting, startSending, syncState } from "./outbox.js";
@@ -63,7 +64,7 @@ const ctx = {
   backToMobs: () => { state.selectedMobId = null; state.selectedAnimalId = null; state.tab = state.tab === "animals" ? "animals" : "mobs"; render(); },
   startImport: (kind, mobId) => startImport(kind, mobId),
   /** After anything is recorded: reload stock, redraw the map's mobs and gates, re-render. */
-  refresh: async () => { forgetRotation(); await loadStock(); render(); },
+  refresh: async () => { forgetRotation(); await loadStock(); render(); drawPlanLayer(); },
   get map() { return farm.map; },
   /** After paddock boundaries change on the server: reload them and re-render. */
   reloadMap: async () => { await loadFeatures(); render(); },
@@ -220,6 +221,7 @@ function setFeatures(features) {
   farm.setFeatures(features);
   drawStock();
   refreshSearch();
+  drawPlanLayer();
 }
 
 /**
@@ -640,6 +642,7 @@ function layersHtml() {
           <span class="count">${counts.get(k.id) || 0}</span>
         </label>`).join("")}
     </div>
+    <div class="layers gap-top">
       ${allFeatures.some(isMgmtOnly) ? `<label title="Areas like AgriWebb's lost boys and girls: not real paddocks">
         <input type="checkbox" data-mgmt ${localGet("showMgmt") === "1" ? "checked" : ""}>
         <span class="swatch" data-colour="#e24e4c"></span>
@@ -647,11 +650,18 @@ function layersHtml() {
         <span class="count">${allFeatures.filter(isMgmtOnly).length}</span>
       </label>` : ""}
       <label>
+        <input type="checkbox" data-planlayer ${localGet("planLayer") === "1" ? "checked" : ""}>
+        <span class="swatch" data-colour="#f58231"></span>
+        Rotation plan: each mob's paddocks and where it goes next
+      </label>
+      <div id="planLegend">${planLegendHtml()}</div>
+      <label>
         <input type="checkbox" data-mobs ${localGet("hideMobs") === "1" ? "" : "checked"}>
         <span class="swatch" data-colour="#4FA9D6"></span>
         Mobs
         <span class="count">${state.mobs.length}</span>
       </label>
+    </div>
     ${state.pasture.size ? `
       <div class="layers gap-top"><label>
         <input type="checkbox" data-pasture ${localGet("pastureLayer") === "1" ? "checked" : ""}>
@@ -768,6 +778,14 @@ function bindOverview() {
   body.querySelectorAll("[data-layer]").forEach((cb) => {
     cb.onchange = () => farm.setKindVisible(cb.dataset.layer, cb.checked);
   });
+  const planToggle = $("[data-planlayer]", body);
+  if (planToggle) planToggle.onchange = async () => {
+    localSet("planLayer", planToggle.checked ? "1" : "0");
+    planLayer.setVisible(planToggle.checked);
+    if (planToggle.checked) await drawPlanLayer();
+    const lg = $("#planLegend");
+    if (lg) { lg.innerHTML = planLegendHtml(); paintSwatches(lg); }
+  };
   const mgmtToggle = $("[data-mgmt]", body);
   if (mgmtToggle) mgmtToggle.onchange = () => {
     localSet("showMgmt", mgmtToggle.checked ? "1" : "0");
@@ -864,6 +882,29 @@ function startImport(kind, mobId = null) {
       catch (e) { toast(e.message, { error: true }); }
     } } } : {});
   }, { kind, mobId });
+}
+
+/* ------------------------------ rotation plan layer ------------------------------ */
+
+let planLayer = null;
+let shownPlan = null;
+/** Draws the rotation plan on the map, if that layer is on. */
+async function drawPlanLayer() {
+  if (!planLayer?.on) return;
+  try {
+    shownPlan = await getPlan();
+    planLayer.draw(shownPlan, state.features.filter((f) => f.properties.kind === "paddock"));
+  } catch (e) {
+    toast(`The rotation plan couldn't be shown: ${e.message}`, { error: true });
+  }
+}
+/** Which colour is which mob, under the layer's tick box. */
+function planLegendHtml() {
+  if (localGet("planLayer") !== "1" || !shownPlan?.ok) return "";
+  return `<ul class="planlegend small">${planMobs(shownPlan).map((m, i) => `
+    <li><span class="swatch" data-colour="${colourOf(i)}"></span><b>${escapeHtml(m.mob)}</b> <span class="muted">${m.head} hd${m.rotation ? ` · rotates around ${m.rotation.names.map(escapeHtml).join(", ")}` : " · no rotation set: any paddock"}</span></li>`).join("")}
+  </ul>
+  <p class="muted tiny">Filled: the paddocks each mob rotates around (lighter where none is set). The line runs from where it is now through its next paddocks in order: solid for the next move, dashed after that, which is rougher. Hover a number for the dates.</p>`;
 }
 
 /** Swatch colours are set through the CSSOM, which the CSP allows, not style attributes. */
@@ -1431,6 +1472,8 @@ async function start() {
     onMiss: () => toast("Drop the mob inside a paddock", { error: true }),
   });
   if (localGet("hideMobs") === "1") mobLayer.setVisible(false);
+  planLayer = new PlanLayer(farm);
+  if (localGet("planLayer") === "1") { planLayer.setVisible(true); drawPlanLayer(); }
   await loadStock();
   try {
     await loadFeatures();

@@ -329,6 +329,37 @@ export interface MobEdit {
   description?: string | null;
   /** Booked to leave the property (a sale, say): null clears it. */
   leaving?: unknown;
+  /** The paddocks this mob rotates around: { paddock_ids, note }; null clears it. */
+  rotation?: unknown;
+}
+
+/**
+ * The paddocks a mob rotates around (the Wagyu breeders between BronzeLeaf,
+ * Silverleaf, 3 mile and Nixons Flat, say). The rotation planner only suggests
+ * paddocks from the group, by its usual rules. Kept in the mob's data: it's a
+ * plan, not something that happened.
+ */
+export interface Rotation { paddock_ids: number[]; note: string | null }
+
+export function mobRotation(mob: { data: string }): Rotation | null {
+  const d = (JSON.parse(mob.data) as Record<string, unknown>)["rotation"] as Partial<Rotation> | undefined;
+  const ids = Array.isArray(d?.paddock_ids) ? d!.paddock_ids.filter((x) => Number.isInteger(x)) : [];
+  return ids.length ? { paddock_ids: ids, note: typeof d?.note === "string" && d.note ? d.note : null } : null;
+}
+
+function cleanRotation(v: unknown): Rotation | null {
+  if (v === null || v === "") return null;
+  const o = (v ?? {}) as Record<string, unknown>;
+  const ids = Array.isArray(o["paddock_ids"]) ? [...new Set((o["paddock_ids"] as unknown[]).map(Number))] : [];
+  if (ids.some((x) => !Number.isInteger(x))) throw new LeavingError("Choose the paddocks from the list");
+  for (const id of ids) {
+    const f = db.prepare("SELECT kind FROM features WHERE id = ? AND deleted_at IS NULL").get(id) as { kind: string } | undefined;
+    if (f?.kind !== "paddock") throw new LeavingError("One of those paddocks is not on the map any more");
+  }
+  if (!ids.length) return null;
+  if (ids.length < 2) throw new LeavingError("A rotation needs at least two paddocks");
+  const note = typeof o["note"] === "string" && o["note"].trim() ? o["note"].trim().slice(0, 200) : null;
+  return { paddock_ids: ids, note };
 }
 
 /**
@@ -383,6 +414,10 @@ export function updateMob(id: number, edit: MobEdit): MobRow | null {
   if (edit.leaving !== undefined) {
     const l = cleanLeaving(edit.leaving);
     if (l) data["leaving"] = l; else delete data["leaving"];
+  }
+  if (edit.rotation !== undefined) {
+    const r = cleanRotation(edit.rotation);
+    if (r) data["rotation"] = r; else delete data["rotation"];
   }
   db.prepare(
     "UPDATE mobs SET name = ?, owner = ?, sex = ?, description = ?, data = ?, updated_at = ? WHERE id = ?"

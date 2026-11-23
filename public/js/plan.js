@@ -52,6 +52,21 @@ export async function renderRotation(el, ctx) {
   if (live) drawRotation(live, ctx, p);
 }
 
+/** The plan for the map layer: the one kept here if it's fresh, else asked for. */
+export async function getPlan() {
+  if (lastPlan && Date.now() - lastAt < 120_000) return lastPlan;
+  if (!pending) pending = get("/api/plan").finally(() => { pending = null; });
+  try {
+    const p = await pending;
+    lastPlan = p; lastAt = Date.now();
+    try { localStorage.setItem(KEEP, JSON.stringify(p)); } catch { /* fine */ }
+    return p;
+  } catch (e) {
+    if (lastPlan) return lastPlan;
+    throw e;
+  }
+}
+
 /** Forget the cached plan, e.g. after a move, so the tab works it out again. */
 export function forgetRotation() { lastPlan = null; lastAt = 0; try { localStorage.removeItem(KEEP); } catch { /* fine */ } }
 
@@ -86,6 +101,8 @@ function drawRotation(el, ctx, p) {
           · in <b>${days(m.days_in)}</b> · ${due(m)}
           <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}${m.leaving ? ` · <b>${m.leaving.head_staying ? `${nf(m.leaving.head_leaving)} hd ` : ""}leaving ${day(m.leaving.date)}${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}</b>` : ""}${m.notes?.length ? ` · ${m.notes.map(escapeHtml).join("; ")}` : ""}</div></div>
         <div class="small">${next(m)}</div>
+        ${m.pattern?.length > 1 ? `<div class="muted tiny">Then: ${m.pattern.slice(1).map((s) => `${escapeHtml(s.name)} ${day(s.from)}`).join(" → ")}</div>` : ""}
+        ${m.rotation ? `<div class="muted tiny">Rotates around ${m.rotation.names.map(escapeHtml).join(", ")}${m.rotation.outside ? ' · <b class="warnc">none free with feed: suggesting outside it</b>' : ""}${m.short_from ? ` · <b class="warnc">no other paddock in it has enough feed for this mob by ${day(m.short_from)}</b>` : ""}</div>` : ""}
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
     ${p.not_ready?.length ? `<p class="small">Crops not ready to graze yet (only suggested for a mob moving on or after the day they're ready): ${p.not_ready.map((c) => `<button class="linkbtn strong" data-pad="${c.paddock_id}">${escapeHtml(c.name)}</button> <span class="muted">(${escapeHtml(c.crop)}, planted ${day(c.sown_on)})</span> ready <b>${day(c.ready_on)}</b>`).join("; ")}.</p>` : ""}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}

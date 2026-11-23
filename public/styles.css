@@ -696,3 +696,20 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .planting .btns{margin-top:6px}
 .croprow{display:grid;grid-template-columns:1fr 110px auto;gap:8px;align-items:end}
 .croprow .btn{margin-bottom:12px}
+
+/* Rotation plan layer: numbered stops in each mob's colour. */
+.plstop{display:flex;align-items:center;justify-content:center;border-radius:50%;border:2px solid #111;font:700 11px/1 system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.pl-c0{background:#e6194b;color:#fff}
+.pl-c1{background:#3cb44b;color:#fff}
+.pl-c2{background:#ffe119;color:#111}
+.pl-c3{background:#4363d8;color:#fff}
+.pl-c4{background:#f58231;color:#fff}
+.pl-c5{background:#911eb4;color:#fff}
+.pl-c6{background:#42d4f4;color:#111}
+.pl-c7{background:#f032e6;color:#fff}
+.pl-c8{background:#bfef45;color:#111}
+.pl-c9{background:#fabed4;color:#111}
+.pl-c10{background:#9a6324;color:#fff}
+.pl-c11{background:#aaffc3;color:#111}
+.planlegend{list-style:none;margin:6px 0 4px 24px;padding:0}
+.planlegend li{margin:3px 0}
