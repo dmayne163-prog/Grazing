@@ -277,12 +277,28 @@ function refreshSearch() {
 
 let lastSearch = { q: "", at: 0 };
 
+/**
+ * On the Animals tab the search box looks for animals only (management tag,
+ * EID or NLIS number), never a paddock: a tag like 11 or 3622 would otherwise
+ * open a paddock whose name starts with it.
+ */
+const animalsOnly = () => state.tab === "animals";
+function syncSearchBox() {
+  const box = $("#search");
+  if (!box) return;
+  const want = animalsOnly() ? "Find an animal by management tag, EID or NLIS…" : "Find a paddock, or an animal by tag or EID…";
+  if (box.placeholder !== want) box.placeholder = want;
+  // No paddock names offered as you type while looking for an animal.
+  if (animalsOnly()) box.removeAttribute("list"); else box.setAttribute("list", "searchList");
+}
+
 function onSearch() {
   const q = $("#search").value.trim().toLowerCase();
   if (!q) return;
   // Enter and the input's change event both land here for one search.
   if (q === lastSearch.q && Date.now() - lastSearch.at < 800) return;
   lastSearch = { q, at: Date.now() };
+  if (animalsOnly()) { searchAnimals(q); return; }
   const hit = state.features.find((f) => f.properties.name.toLowerCase() === q)
     || state.features.find((f) => f.properties.name.toLowerCase().startsWith(q));
   if (hit) {
@@ -434,6 +450,7 @@ async function startSplit() {
 /* ---------------------------------- panel ---------------------------------- */
 
 function render() {
+  syncSearchBox();
   const body = $("#panelBody");
   if (state.mode === "new" || state.mode === "split-name") return; // their own forms are showing
   if (state.selectedAnimalId !== null) {
