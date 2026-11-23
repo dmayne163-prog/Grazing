@@ -11,10 +11,10 @@ import { parentPort } from "node:worker_threads";
 import { gateStateAt, listGates } from "../map/gates.js";
 import { buildOutlook, buildPlanProjection, findOpenGates, type PlanGroup } from "./model.js";
 
-parentPort!.once("message", (m: { job: "outlook" } | { job: "gates"; before: string } | { job: "plan"; groups: PlanGroup[]; residual: number; cap: number }) => {
+parentPort!.once("message", (m: { job: "outlook" } | { job: "gates"; before: string } | { job: "plan"; groups: PlanGroup[]; residual: number; cap: number; floors?: Record<string, number> }) => {
   try {
     if (m.job === "plan") {
-      parentPort!.postMessage({ ok: true, result: buildPlanProjection(m.groups, m.residual, m.cap) });
+      parentPort!.postMessage({ ok: true, result: buildPlanProjection(m.groups, m.residual, m.cap, m.floors ?? {}) });
     } else if (m.job === "gates") {
       const gates = listGates().filter((g) => g.paddocks.length === 2)
         .map((g) => ({ id: g.gate_id, name: g.name, a: g.paddocks[0]!, b: g.paddocks[1]! }));

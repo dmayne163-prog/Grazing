@@ -1119,6 +1119,10 @@ function kindFields(kind, props) {
       <div class="f"><label for="fCrop">Pasture / crop</label><input id="fCrop" value="${v("crop")}" placeholder="e.g. Natural grasses"></div>
       <div class="f"><label for="fGraz">Grazable ha</label><input id="fGraz" type="number" min="0" step="0.1" value="${v("grazable_ha")}" placeholder="all of it"></div>
     </div>
+    <div class="f"><label for="fFloor">Leave at least (kg/ha)</label>
+      <input id="fFloor" type="number" min="100" max="5000" step="50" inputmode="numeric" value="${v("residual_kg_ha")}" placeholder="the farm's rule">
+      <p class="muted tiny">For poorer country that never carries much (BronzeLeaf, Silverleaf): the Rotation tab grazes it down to this instead of the farm's rule. Blank uses the farm's rule.</p>
+    </div>
     <div class="f"><label for="fYards">Getting cattle to the yards</label>
       <select id="fYards">
         <option value=""${!props?.yards_access ? " selected" : ""}>Work it out from the map</option>
@@ -1140,6 +1144,8 @@ function readKindFields(kind, props) {
     const g = $("#fGraz")?.value;
     set("grazable_ha", g === "" ? "" : Number(g));
     set("yards_access", $("#fYards")?.value || "");
+    const fl = $("#fFloor")?.value.trim() ?? "";
+    set("residual_kg_ha", fl === "" ? "" : Number(fl));
   }
   if (kind === "water") {
     const c = $("#fCap")?.value;
@@ -1199,6 +1205,7 @@ function featureHtml(f) {
     facts.push(["Open to", `<span class="inuse">${openTo.map((id) => escapeHtml(state.byId.get(id)?.properties.name ?? "")).join(", ")}</span>${via.length ? ` <span class="muted">via ${via.map(escapeHtml).join(", ")}</span>` : ""}`]);
   }
   if (props.grazable_ha) facts.push(["Grazable", ha(Number(props.grazable_ha))]);
+  if (props.residual_kg_ha) facts.push(["Leave at least", `${nf0.format(props.residual_kg_ha)} kg/ha`]);
   if (props.yards_access) facts.push(["To the yards", props.yards_access === "easy" ? "Easy (laneway or short muster)" : "Hard (timbered or long muster)"]);
   if (props.agriwebb_area_ha && !isPaddock) facts.push(["AgriWebb said", ha(Number(props.agriwebb_area_ha))]);
   if (p.length_m != null) facts.push(["Length", km(p.length_m)]);

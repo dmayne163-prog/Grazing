@@ -85,7 +85,7 @@ function inWorker(): Promise<Outlook | null> {
 }
 
 /** Runs one of the model's slow jobs in a worker thread (see outlook-worker.ts). */
-function runJob<T>(message: { job: "outlook" } | { job: "gates"; before: string } | { job: "plan"; groups: PlanGroup[]; residual: number; cap: number }): Promise<T> {
+function runJob<T>(message: { job: "outlook" } | { job: "gates"; before: string } | { job: "plan"; groups: PlanGroup[]; residual: number; cap: number; floors?: Record<string, number> }): Promise<T> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL("../pasture/outlook-worker.js", import.meta.url));
     w.once("message", (m: { ok: boolean; result?: T; error?: string }) => {
@@ -320,13 +320,25 @@ function planInputs() {
   const groups = planGroups();
   // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
   const cap = Math.max(FEED_HORIZON, rules.max_days);
-  return { rules, groups, cap, key: JSON.stringify({ groups, r: rules.residual, cap }) };
+  const floors = paddockFloors();
+  return { rules, groups, cap, floors, key: JSON.stringify({ groups, r: rules.residual, cap, floors }) };
 }
 
+/** Each paddock's own "leave at least" kg/ha, where one is set (poorer country). */
+function paddockFloors(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const f of db.prepare("SELECT id, props FROM features WHERE kind = 'paddock' AND deleted_at IS NULL").all() as Array<{ id: number; props: string | null }>) {
+    const v = Number((JSON.parse(f.props || "{}") as Record<string, unknown>)["residual_kg_ha"]);
+    if (Number.isFinite(v) && v > 0) out[String(f.id)] = v;
+  }
+  return out;
+}
+
+let planFloors: Record<string, number> = {};
 function workOutPlan(key: string, groups: PlanGroup[], residual: number, cap: number): Promise<PlanStore> {
   if (planRun?.key === key) return planRun.job;
   planStale = false;
-  const job = runJob<PlanProjection | null>({ job: "plan", groups, residual, cap }).then((proj) => {
+  const job = runJob<PlanProjection | null>({ job: "plan", groups, residual, cap, floors: planFloors }).then((proj) => {
     const store = { key, at: Date.now(), day: today(), proj };
     if (planRun?.job === job) planRun = null;
     planCache = store;
@@ -346,7 +358,7 @@ export function refreshPlanSoon(): void {
   planTimer = setTimeout(() => {
     planTimer = null;
     try {
-      const { groups, rules, cap, key } = planInputs();
+      const { groups, rules, cap, key, floors } = planInputs(); planFloors = floors;
       if (!planFresh(key)) workOutPlan(key, groups, rules.residual, cap).catch((e) => log.error("rotation plan failed", e));
     } catch (e) { log.error("rotation plan failed", e); }
   }, 3000);
@@ -369,7 +381,7 @@ function ageProjection(proj: PlanProjection, from: string): PlanProjection {
 
 pastureApi.get("/plan", async (_req, res) => {
   try {
-    const { rules, groups, cap, key } = planInputs();
+    const { rules, groups, cap, key, floors } = planInputs(); planFloors = floors;
     let store: PlanStore;
     if (planCache && !planStale && planCache.key === key) {
       // A week-old one is still served, and worked out again behind it.

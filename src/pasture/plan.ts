@@ -272,7 +272,11 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     const why = byFeed !== null && byFeed <= byLimit ? "feed" : "limit";
     const notes: string[] = [];
     if (left && left.median < rules.max_days && left.low < left.median - 3) notes.push(`a drier run would leave ${left.low} days`);
-    if (cur?.now !== null && cur?.now !== undefined && cur.now < rules.residual) notes.push(`already below ${rules.residual} kg/ha`);
+    // The floor where it is: each paddock's own, area-weighted, or the farm's.
+    const here = g.paddocks.map((id) => pad.get(id)).filter((p): p is NonNullable<typeof p> => !!p);
+    const hereArea = here.reduce((t, p) => t + p.area_ha, 0);
+    const floor = hereArea ? Math.round(here.reduce((t, p) => t + (p.floor ?? rules.residual) * p.area_ha, 0) / hereArea) : rules.residual;
+    if (cur?.now !== null && cur?.now !== undefined && cur.now < floor) notes.push(`already below ${floor} kg/ha`);
     if (daysIn + moveIn < rules.min_days) notes.push(`under the ${rules.min_days}-day minimum stay`);
     if (!left) notes.push("no pasture readings for where it is");
 
@@ -353,7 +357,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         };
         const score = parts.feed + parts.margin + parts.green + parts.rest + parts.walk + parts.yards;
         return {
-          paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
+          paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading, floor: p.floor ?? rules.residual,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
           confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar, yards_access: access.get(o.paddock_id) ?? null,
@@ -382,7 +386,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       mob: g.views.map((v) => v.mob.name).join(" + "), mobs: g.views.length, owner: owners.join(", ") || null,
       head: g.views.reduce((t, v) => t + v.state.head, 0), ae: Math.round(g.views.reduce((t, v) => t + aeOf(v), 0)),
       paddocks: g.paddocks.map((id) => pad.get(id)?.name ?? `#${id}`), paddock_ids: g.paddocks,
-      in_since: since, days_in: daysIn,
+      in_since: since, days_in: daysIn, floor,
       now: cur?.now ?? null, days_left: left,
       move_by: addDays(now, leaving?.stays ? leaving.days : moveIn), move_in: leaving?.stays ? leaving.days : moveIn, why, notes, leaving,
       suggested: null as null | (typeof options)[number], options: leaving?.stays ? [] : chosen.slice(0, 6),

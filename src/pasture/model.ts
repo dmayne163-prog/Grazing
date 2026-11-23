@@ -788,7 +788,7 @@ export interface PlanProjection {
   current: Record<string, { now: number | null; days: { low: number; median: number } | null }>;
   /** For each group, each paddock it could go to: pasture now and days of grazing there alone. */
   options: Record<string, Array<{ paddock_id: number; now: number; days: { low: number; median: number } }>>;
-  paddocks: Array<{ id: number; name: string; subtype: string | null; area_ha: number; now: number | null; last_reading: string | null } & PlanFacts>;
+  paddocks: Array<{ id: number; name: string; subtype: string | null; area_ha: number; floor?: number; now: number | null; last_reading: string | null } & PlanFacts>;
 }
 
 /** What went into a paddock's figures, so the planner can explain a suggestion. */
@@ -813,7 +813,9 @@ export interface PlanFacts {
  * its own, across past seasons from today's soil water: the median and the
  * 20th percentile (a drier run), up to `cap` days. Stock elsewhere stays put.
  */
-export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number): PlanProjection | null {
+export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number, floors: Record<string, number> = {}): PlanProjection | null {
+  // Poorer country can have its own floor (BronzeLeaf rarely carries more than 900 kg/ha).
+  const floorOf = (id: number) => floors[String(id)] ?? R;
   const ctx = projectionSetup();
   if (!ctx) return null;
   const { inp, params, scen } = ctx;
@@ -829,6 +831,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
     if (!ps.length) return null;
     const area = ps.reduce((t, p) => t + p.area, 0);
     const perHa = ae / area;
+    const floor = ps.reduce((t, p) => t + floorOf(p.id) * p.area, 0) / area;
     const nYears = scen.get(ps[0]!.cell)!.length;
     const days: number[] = [];
     for (let y = 0; y < nYears; y++) {
@@ -836,7 +839,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
       let d = 0;
       for (; d < cap; d++) {
         const avg = ps.reduce((t, p, i) => t + total(st[i]!) * p.area, 0) / area;
-        if (avg < R) break;
+        if (avg < floor) break;
         ps.forEach((p, i) => { const dr = scen.get(p.cell)![y]!; step(st[i]!, params, mult(p), dr.D[d]!, dr.WI[d]!, dr.R[d]!, perHa); });
       }
       days.push(d);
@@ -893,7 +896,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
     for (const p of inp.paddocks) {
       if (g.paddocks.includes(p.id) || !today.has(p.id)) continue;
       const now = Math.round(total(today.get(p.id)!));
-      if (now < R) continue;
+      if (now < floorOf(p.id)) continue;
       const days = daysFor([p.id], g.ae);
       if (days) options[g.key]!.push({ paddock_id: p.id, now, days });
     }
@@ -901,7 +904,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number)
   return {
     as_of: isoOf(inp.end), residual: R, current, options,
     paddocks: inp.paddocks.map((p) => ({
-      id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1),
+      id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1), floor: floorOf(p.id),
       now: today.has(p.id) ? Math.round(total(today.get(p.id)!)) : null,
       last_reading: p.obs.length ? isoOf(p.obs[p.obs.length - 1]!.day) : null,
       ...factsFor(p),
