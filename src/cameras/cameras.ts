@@ -13,26 +13,38 @@ import { db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { today } from "../stock/store.js";
 import { gotoPreset } from "./nvr-http.js";
+import { cleanRoi, measure, type Roi } from "./greenness.js";
 
 const log = logger("cameras");
 export const CAMERA_DIR = join(config.dataDir, "cameras");
 
 /** preset: for a turning (PTZ) camera, the saved position it's turned to for this paddock. */
-export interface Camera { id: number; channel: number; preset: number | null; name: string; feature_id: number; created_at: number }
-export interface Shot { id: number; camera_id: number; feature_id: number; taken_on: string; taken_at: number; file: string; bytes: number }
+export interface Camera { id: number; channel: number; preset: number | null; name: string; feature_id: number; created_at: number; roi: Roi | null }
+export interface Shot {
+  id: number; camera_id: number; feature_id: number; taken_on: string; taken_at: number; file: string; bytes: number;
+  /** Greenness in the camera's grass box (null: no box, or not read yet); gcc_ok 0 with gcc_why: a picture that can't be trusted. */
+  gcc: number | null; gcc_ok: number | null; gcc_why: string | null; gcc_roi: string | null;
+}
+type CameraRow = Omit<Camera, "roi"> & { roi: string | null };
+const fromRow = (r: CameraRow): Camera => {
+  let roi: Roi | null = null;
+  try { roi = r.roi ? (JSON.parse(r.roi) as Roi) : null; } catch { roi = null; }
+  return { ...r, roi };
+};
 
 export class CameraError extends Error {}
 
 export const camerasOn = () => !!(config.nvrHost && config.nvrUser);
 
 export function listCameras(featureId?: number): Camera[] {
-  return (featureId === undefined
-    ? db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL ORDER BY channel, preset, id").all()
-    : db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel, preset, id").all(featureId)) as Camera[];
+  return ((featureId === undefined
+    ? db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE deleted_at IS NULL ORDER BY channel, preset, id").all()
+    : db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel, preset, id").all(featureId)) as CameraRow[]).map(fromRow);
 }
 
 export function getCamera(id: number): Camera | null {
-  return (db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as Camera | undefined) ?? null;
+  const r = db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as CameraRow | undefined;
+  return r ? fromRow(r) : null;
 }
 
 function clean(b: Record<string, unknown>, old?: Camera) {
@@ -43,14 +55,16 @@ function clean(b: Record<string, unknown>, old?: Camera) {
   const pv = b["preset"] === undefined && old ? old.preset : b["preset"];
   const preset = pv === null || pv === undefined || pv === "" ? null : Number(pv);
   if (preset !== null && (!Number.isInteger(preset) || preset < 1 || preset > 255)) throw new CameraError("Preset: the saved position's number on the NVR, e.g. 1, or blank for a fixed camera");
-  return { channel, name, preset };
+  let roi: Roi | null;
+  try { roi = b["roi"] === undefined && old ? old.roi : cleanRoi(b["roi"]); } catch (e) { throw new CameraError((e as Error).message); }
+  return { channel, name, preset, roi };
 }
 
 export function addCamera(featureId: number, b: Record<string, unknown>): Camera {
   const f = db.prepare("SELECT kind FROM features WHERE id = ? AND deleted_at IS NULL").get(featureId) as { kind: string } | undefined;
   if (f?.kind !== "paddock") throw new CameraError("A camera goes on a paddock");
   const c = clean(b);
-  const r = db.prepare("INSERT INTO cameras (channel, preset, name, feature_id, created_at) VALUES (?, ?, ?, ?, ?)").run(c.channel, c.preset, c.name, featureId, Date.now());
+  const r = db.prepare("INSERT INTO cameras (channel, preset, name, feature_id, created_at, roi) VALUES (?, ?, ?, ?, ?, ?)").run(c.channel, c.preset, c.name, featureId, Date.now(), c.roi ? JSON.stringify(c.roi) : null);
   return getCamera(Number(r.lastInsertRowid))!;
 }
 
@@ -58,7 +72,9 @@ export function updateCamera(id: number, b: Record<string, unknown>): Camera {
   const old = getCamera(id);
   if (!old) throw new CameraError("That camera doesn't exist any more");
   const c = clean(b, old);
-  db.prepare("UPDATE cameras SET channel = ?, preset = ?, name = ? WHERE id = ?").run(c.channel, c.preset, c.name, id);
+  db.prepare("UPDATE cameras SET channel = ?, preset = ?, name = ?, roi = ? WHERE id = ?").run(c.channel, c.preset, c.name, c.roi ? JSON.stringify(c.roi) : null, id);
+  // A new grass box: read every picture again in the background.
+  if (JSON.stringify(c.roi) !== JSON.stringify(old.roi)) void scoreMissing().catch((e) => log.error("greenness failed", e));
   return getCamera(id)!;
 }
 
@@ -160,7 +176,9 @@ async function grabShot(cam: Camera): Promise<Shot> {
     db.prepare("DELETE FROM camera_shots WHERE camera_id = ? AND taken_on = ?").run(cam.id, day);
     const r = db.prepare("INSERT INTO camera_shots (camera_id, feature_id, taken_on, taken_at, file, bytes) VALUES (?, ?, ?, ?, ?, ?)")
       .run(cam.id, cam.feature_id, day, Date.now(), file, bytes);
-    return getShot(Number(r.lastInsertRowid))!;
+    const shot = getShot(Number(r.lastInsertRowid))!;
+    if (cam.roi) await scoreShot(shot, cam.roi).catch((e) => log.warn(`greenness for ${cam.name}: ${String(e)}`));
+    return getShot(shot.id)!;
   } finally {
     try { unlinkSync(tmp); } catch { /* moved or never made */ }
   }
@@ -201,5 +219,34 @@ export function startCameraShots(): NodeJS.Timeout | null {
   const t = setInterval(tick, 20 * 60_000);
   t.unref();
   setTimeout(tick, 90_000).unref();
+  setTimeout(() => { scoreMissing().catch((e) => log.error("greenness failed", e)); }, 30_000).unref();
   return t;
+}
+
+/* ------------------------------- greenness -------------------------------- */
+
+async function scoreShot(shot: Shot, roi: Roi): Promise<void> {
+  const g = await measure(join(CAMERA_DIR, shot.file), roi);
+  db.prepare("UPDATE camera_shots SET gcc = ?, gcc_ok = ?, gcc_why = ?, gcc_roi = ? WHERE id = ?")
+    .run(g.gcc, g.ok ? 1 : 0, g.why, JSON.stringify(roi), shot.id);
+}
+
+let scoring: Promise<number> | null = null;
+/** Scores every picture not yet read with its camera's current grass box (after a box is set or moved, and at start-up). */
+export function scoreMissing(): Promise<number> {
+  if (scoring) return scoring.then(() => scoreMissing());
+  scoring = (async () => {
+    let n = 0;
+    for (const cam of listCameras()) {
+      if (!cam.roi) continue;
+      const key = JSON.stringify(cam.roi);
+      const shots = db.prepare("SELECT * FROM camera_shots WHERE camera_id = ? AND (gcc_roi IS NULL OR gcc_roi != ?)").all(cam.id, key) as Shot[];
+      for (const s of shots) {
+        try { await scoreShot(s, cam.roi); n++; } catch (e) { log.warn(`greenness for ${cam.name} ${s.taken_on}: ${String(e)}`); }
+      }
+    }
+    if (n) log.info(`greenness read for ${n} camera picture(s)`);
+    return n;
+  })().finally(() => { scoring = null; });
+  return scoring;
 }
