@@ -31,6 +31,7 @@
  * with the weather of every past year since 1890 from today's date: the spread
  * of outcomes is the spread of seasons this country has had.
  */
+import { latestChecks } from "./feedchecks.js";
 import { db, getSetting } from "../db/database.js";
 import { paddockCells } from "../climate/silo.js";
 import { aeFromWeight, allSegments, mobViews, today, voidedIds } from "../stock/store.js";
@@ -141,6 +142,8 @@ interface Obs { day: number; tsdm: number; green: number | null; w: number }
 interface Paddock {
   id: number; name: string; area: number; cell: string; subtype: string | null;
   obs: Obs[];
+  /** The newest feed check, when it's newer than the last reading: the paddock starts from it. */
+  check: { day: number; tsdm: number; rating: string | null; note: string | null; by: string | null } | null;
   ae: Float64Array; // AE per ha, day by day from the model's start
 }
 
@@ -223,12 +226,20 @@ function loadInputs(): Inputs | null {
   for (const f of feats) {
     const cell = cells.get(f.id);
     if (!cell || !f.area_ha) continue;
-    byId.set(f.id, { id: f.id, name: f.name, area: f.area_ha, cell, subtype: f.subtype, obs: [], ae: new Float64Array(n) });
+    byId.set(f.id, { id: f.id, name: f.name, area: f.area_ha, cell, subtype: f.subtype, obs: [], check: null, ae: new Float64Array(n) });
   }
   for (const r of obsRows) {
     const p = byId.get(r.feature_id);
     // A clear view counts for more than a cloudy pass Cibo has filled in.
     if (p) p.obs.push({ day: dayNo(r.date), tsdm: r.tsdm_p50, green: r.green, w: 0.3 + 0.7 * Math.min(1, (r.captured_pct ?? 0) / 100) });
+  }
+  // Feed checks: only one newer than the last reading counts (a new reading takes over).
+  for (const [id, c] of latestChecks()) {
+    const p = byId.get(id);
+    if (!p) continue;
+    const day = dayNo(c.checked_on);
+    const last = p.obs[p.obs.length - 1];
+    if (day >= start && (!last || day >= last.day)) p.check = { day, tsdm: c.kg_ha, rating: c.rating, note: c.note, by: c.username };
   }
 
   // Stock: each segment's AE spread over the paddocks it could reach, by area.
@@ -412,6 +423,8 @@ export interface PaddockOutlook {
   area_ha: number;
   multiplier: number | null;
   last_reading: { date: string; tsdm: number; green: number | null } | null;
+  /** A feed check newer than the last reading, which today's figure starts from. */
+  check: { date: string; kg_ha: number; rating: string | null } | null;
   now: number | null;                 // estimate of total pasture for today, kg/ha
   now_green: number | null;
   ae_per_ha: number;                  // stock in the paddock now
@@ -472,14 +485,31 @@ function projectionSetup() {
   return { inp, fit, params, n, hist, lastYear, longWeather, years, scen };
 }
 
-/** A paddock's pasture today: from its latest reading, run forward with what actually happened. */
+/**
+ * A paddock's pasture today: from its latest reading, run forward with what
+ * actually happened. A newer feed check resets the total on its day, keeping
+ * the model's share of green (a check doesn't say how green it is).
+ */
 function stateToday(ctx: NonNullable<ReturnType<typeof projectionSetup>>, p: Paddock): Float64Array | null {
   const last = p.obs[p.obs.length - 1];
-  if (!last) return null;
+  const chk = p.check;
+  if (!last && !chk) return null;
   const m = ctx.fit?.multipliers.get(p.id) ?? 1;
   const dr = ctx.hist.get(p.cell)!;
-  const s0 = startState(last.tsdm, last.green);
-  for (let t = last.day; t <= ctx.inp.end; t++) step(s0, ctx.params, m, dr.D[t - ctx.inp.start]!, dr.WI[t - ctx.inp.start]!, dr.R[t - ctx.inp.start]!, p.ae[t - ctx.inp.start]!);
+  const run = (s: Float64Array, from: number, to: number) => {
+    for (let t = from; t <= Math.min(to, ctx.inp.end); t++) step(s, ctx.params, m, dr.D[t - ctx.inp.start]!, dr.WI[t - ctx.inp.start]!, dr.R[t - ctx.inp.start]!, p.ae[t - ctx.inp.start]!);
+  };
+  let s0: Float64Array;
+  let from: number;
+  if (last) { s0 = startState(last.tsdm, last.green); from = last.day; }
+  else { s0 = startState(chk!.tsdm, null); from = chk!.day; }
+  if (last && chk) {
+    run(s0, from, chk.day - 1);
+    const k = chk.tsdm / Math.max(1, s0[0]! + s0[1]!);
+    s0[0] = Math.max(MIN_POOL, s0[0]! * k); s0[1] = Math.max(MIN_POOL, s0[1]! * k);
+    from = chk.day;
+  }
+  run(s0, from, ctx.inp.end);
   return s0;
 }
 
@@ -499,14 +529,16 @@ export function buildOutlook(): Outlook | null {
     const last = p.obs[p.obs.length - 1] ?? null;
     const m = fit?.multipliers.get(p.id) ?? 1;
     const aeNow = p.ae[n - 1] ?? 0;
+    const chk = p.check;
     propAe += aeNow * p.area;
     const o: PaddockOutlook = {
       id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1), multiplier: fit?.multipliers.has(p.id) ? m : null,
       last_reading: last ? { date: isoOf(last.day), tsdm: last.tsdm, green: last.green } : null,
+      check: chk ? { date: isoOf(chk.day), kg_ha: chk.tsdm, rating: chk.rating } : null,
       now: null, now_green: null, ae_per_ha: round(aeNow, 3), days_left: null, at: null, capacity_ae: null, series: [],
     };
     out.push(o);
-    if (!last) continue;
+    if (!last && !chk) continue;
 
     // From the latest reading up to yesterday, with what actually happened.
     const s0 = stateToday(ctx, p)!;
@@ -795,6 +827,8 @@ export interface PlanProjection {
 export interface PlanFacts {
   /** The latest Cibo PastureKey reading: total and green, kg/ha. */
   reading: { date: string; tsdm: number; green: number | null } | null;
+  /** A feed check newer than that reading: today's figure starts from it instead. */
+  check: { date: string; kg_ha: number; rating: string | null; note: string | null; by: string | null } | null;
   now_green: number | null;
   /** The fitted growth multiplier for this paddock (soil, land condition); 1 is the district average. */
   multiplier: number | null;
@@ -881,6 +915,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number,
     const st = today.get(p.id);
     return {
       reading: last ? { date: isoOf(last.day), tsdm: Math.round(last.tsdm), green: last.green === null ? null : Math.round(last.green) } : null,
+      check: p.check ? { date: isoOf(p.check.day), kg_ha: Math.round(p.check.tsdm), rating: p.check.rating, note: p.check.note, by: p.check.by } : null,
       now_green: st ? Math.round(st[0]!) : null,
       multiplier: ctx.fit?.multipliers.has(p.id) ? round(ctx.fit.multipliers.get(p.id)!, 2) : null,
       rain_since_reading: last ? c.rainSince(last.day) : null,

@@ -501,6 +501,22 @@ CREATE TABLE IF NOT EXISTS plantings (
 );
 CREATE INDEX IF NOT EXISTS idx_plantings_feature ON plantings(feature_id, sown_on);
 
+-- Feed checks: what was seen in a paddock, as a rating or a kg/ha estimate.
+-- The pasture model starts the paddock from the newest one when it's newer
+-- than the last Cibo reading.
+CREATE TABLE IF NOT EXISTS feed_checks (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  feature_id  INTEGER NOT NULL,
+  checked_on  TEXT    NOT NULL,
+  rating      TEXT,                     -- eaten | short | fair | plenty, or null for a kg/ha estimate alone
+  kg_ha       REAL    NOT NULL,
+  note        TEXT,
+  username    TEXT,
+  created_at  INTEGER NOT NULL,
+  deleted_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_feed_checks_feature ON feed_checks(feature_id, checked_on);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

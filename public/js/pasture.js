@@ -454,7 +454,7 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
   const span = (v) => `${Math.round(v.median).toLocaleString("en-AU")} <span class="muted">(${Math.round(v.low).toLocaleString("en-AU")}–${Math.round(v.high).toLocaleString("en-AU")})</span>`;
   el.querySelector("#paddockOutlook").innerHTML = `
     <dl class="facts gap-top">
-      <dt>Today</dt><dd>about <b>${kg(ol.now)}</b> <span class="muted">estimated on from the last reading</span></dd>
+      <dt>Today</dt><dd>about <b>${kg(ol.now)}</b> <span class="muted">${ol.check ? `estimated on from your feed check of ${fmtDay(ol.check.date)} (${kg(ol.check.kg_ha)})` : "estimated on from the last reading"}</span></dd>
       ${ol.days_left ? `<dt>To ${R} kg/ha</dt><dd><b>${daysText(ol.days_left.median)} days</b> <span class="muted">with the stock now in it (${ol.ae_per_ha.toFixed(2)} AE/ha); ${daysText(ol.days_left.low)} in a poor run, ${daysText(ol.days_left.high)} in a good one</span></dd>` : ""}
       <dt>In 3 months</dt><dd>${span(ol.at["90"])} kg/ha</dd>
       <dt>In 6 months</dt><dd>${span(ol.at["180"])} kg/ha</dd>

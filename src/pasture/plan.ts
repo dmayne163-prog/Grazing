@@ -81,6 +81,9 @@ const SCORE = { marginShare: 0.25, greenMax: 15, restCap: 120, restUnknown: 60, 
  */
 const LEAVING = { feedMax: 20, yards: [20, 20, 12, 6] as const };
 
+/** How a feed check reads in a note. */
+const CHECK_WORDS: Record<string, string> = { eaten: "eaten down", short: "getting short", fair: "fair", plenty: "plenty" };
+
 const confidenceFor = (ageDays: number | null) =>
   ageDays === null ? SCORE.staleTo : ageDays <= SCORE.freshDays ? 1 : Math.max(SCORE.staleTo, 1 - (ageDays - SCORE.freshDays) / (SCORE.staleOver - SCORE.freshDays) * (1 - SCORE.staleTo));
 
@@ -286,6 +289,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     const hereArea = here.reduce((t, p) => t + p.area_ha, 0);
     const floor = hereArea ? Math.round(here.reduce((t, p) => t + (p.floor ?? rules.residual) * p.area_ha, 0) / hereArea) : rules.residual;
     if (cur?.now !== null && cur?.now !== undefined && cur.now < floor) notes.push(`already below ${floor} kg/ha`);
+    for (const p of here) if (p.check) notes.push(`${here.length > 1 ? `${p.name}: ` : ""}feed check ${niceDay(p.check.date)}, ${CHECK_WORDS[p.check.rating ?? ""] ?? `about ${p.check.kg_ha} kg/ha`}`);
     if (daysIn + moveIn < rules.min_days) notes.push(`under the ${rules.min_days}-day minimum stay`);
     if (!left) notes.push("no pasture readings for where it is");
 
@@ -340,7 +344,9 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         const weight = weights.get(o.paddock_id) ?? 1;
         const restCounts = rest === null ? null : Math.round(rest * weight);
         const p = pad.get(o.paddock_id)!;
-        const age = p.reading ? daysBetween(p.reading.date, now) : null;
+        // A feed check newer than the reading counts as fresh information too.
+        const seen = p.check?.date ?? p.reading?.date ?? null;
+        const age = seen ? daysBetween(seen, now) : null;
         const confidence = confidenceFor(age);
         const r1 = (x: number) => Math.round(x * 10) / 10;
         const greenShare = p.now_green !== null && o.now > 0 ? Math.min(1, p.now_green / o.now) : null;
@@ -366,13 +372,13 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         };
         const score = parts.feed + parts.margin + parts.green + parts.rest + parts.walk + parts.yards;
         return {
-          paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading, floor: p.floor ?? rules.residual,
+          paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading, checked: p.check?.date ?? null, floor: p.floor ?? rules.residual,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
           confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar, yards_access: access.get(o.paddock_id) ?? null,
           planting: plantingOf(o.paddock_id),
           facts: {
-            reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
+            reading: p.reading, check: p.check, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
           },
         };

@@ -5,6 +5,7 @@ import express, { Router } from "express";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db, setSetting } from "../db/database.js";
 import { residual, type GateCandidate, type Outlook, type PlanGroup, type PlanProjection } from "../pasture/model.js";
+import { checksStamp } from "../pasture/feedchecks.js";
 import { FEED_HORIZON, makePlan, planGroups, planRules, setPlanRules } from "../pasture/plan.js";
 import { allSegments, today } from "../stock/store.js";
 import { parseWhen, setGate, StockError } from "../stock/actions.js";
@@ -60,7 +61,7 @@ function outlook(): Promise<Outlook | null> {
            (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), 0) || ':' || IFNULL(MAX(deleted_at), 0) FROM features WHERE kind = 'paddock') || '|' ||
            (SELECT IFNULL(MAX(created_at), 0) FROM mobs) AS k
   `).get() as { k: string };
-  const key = `${k.k}|${residual()}`;
+  const key = `${k.k}|${residual()}|${checksStamp()}`;
   if (outlookCache?.key !== key) {
     const t0 = Date.now();
     const value = inWorker().then((o) => {
@@ -321,7 +322,7 @@ function planInputs() {
   // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
   const cap = Math.max(FEED_HORIZON, rules.max_days);
   const floors = paddockFloors();
-  return { rules, groups, cap, floors, key: JSON.stringify({ groups, r: rules.residual, cap, floors }) };
+  return { rules, groups, cap, floors, key: JSON.stringify({ groups, r: rules.residual, cap, floors, checks: checksStamp() }) };
 }
 
 /** Each paddock's own "leave at least" kg/ha, where one is set (poorer country). */

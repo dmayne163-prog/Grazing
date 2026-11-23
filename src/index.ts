@@ -17,6 +17,7 @@ import { reconcileAllMobWeights } from "./animals/store.js";
 import { offlineOnce, pruneOfflineRequests } from "./http/offline-once.js";
 import { notesApi } from "./api/notes-routes.js";
 import { plantingApi } from "./api/planting-routes.js";
+import { feedCheckApi } from "./api/feedcheck-routes.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -83,6 +84,7 @@ app.use("/api", pastureApi);
 app.use("/api", mapApi);
 app.use("/api", notesApi);
 app.use("/api", plantingApi);
+app.use("/api", feedCheckApi);
 
 app.use("/tiles", requireAuth, tiles);
 
