@@ -143,6 +143,7 @@ function gateHops(gates: Array<{ paddocks: number[] }>) {
 
 const DAY = 86_400_000;
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+const niceDay = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "UTC" });
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY);
 
 type View = ReturnType<typeof mobViews>[number];
@@ -262,11 +263,11 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     // Booked to leave: plan only up to the day, and end up near the yards.
     const bookings = g.views.map((v) => ({ name: v.mob.name, l: mobLeaving(v.mob) }));
     const booked = bookings.filter((b) => b.l);
-    let leaving: null | { date: string; days: number; note: string | null; yards_id: number | null; yards: string | null; yards_hops_now: number | null; stays: boolean; need: number; last: boolean } = null;
+    let leaving: null | { date: string; days: number; note: string | null; yards_id: number | null; yards: string | null; yards_hops_now: number | null; stays: boolean; need: number; last: boolean; head_leaving: number; head_staying: number } = null;
     if (booked.length && booked.length === bookings.length) {
       const date = booked.map((b) => b.l!.date).sort().at(-1)!;
       const days = daysBetween(now, date);
-      if (days < 0) notes.push(`was booked to leave on ${date}: record the sale, or change the date`);
+      if (days < 0) notes.push(`was booked to leave on ${niceDay(date)}: record the sale, or change the date`);
       else {
         const yardsId = booked.find((b) => b.l!.yards_id !== null)?.l!.yards_id ?? defaultYards;
         const hopsNow = yardsId === null ? null : yardsHopsOf(g.paddocks, yardsId);
@@ -277,10 +278,21 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
         leaving = {
           date, days, note: booked.map((b) => b.l!.note).find(Boolean) ?? null, yards_id: yardsId, yards: yardsId === null ? null : nameOf(yardsId),
           yards_hops_now: hopsNow, stays, need: stays ? 0 : days - moveIn, last: stays || days - moveIn <= rules.max_days,
+          // Part of a mob can be booked: the whole mob is mustered and drafted
+          // on the day, so it still wants to be near the yards; the rest are
+          // planned again once the sale is recorded.
+          head_leaving: 0, head_staying: 0,
         };
+        for (const v of g.views) {
+          const l = mobLeaving(v.mob)!;
+          const go = l.head === null ? v.state.head : Math.min(l.head, v.state.head);
+          leaving.head_leaving += go;
+          leaving.head_staying += v.state.head - go;
+        }
+        if (leaving.head_staying > 0) notes.push(`${leaving.head_staying} hd stay on after ${niceDay(date)}: they'll be planned again once the sale is recorded`);
       }
     } else if (booked.length) {
-      for (const b of booked) notes.push(`${b.name} is booked to leave on ${b.l!.date}`);
+      for (const b of booked) notes.push(`${b.name} is booked to leave on ${niceDay(b.l!.date)}`);
     }
 
     const options = (proj.options[key] ?? [])

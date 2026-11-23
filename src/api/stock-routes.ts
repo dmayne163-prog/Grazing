@@ -105,7 +105,13 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
   const b = (req.body ?? {}) as Record<string, unknown>;
   const edit: Record<string, unknown> = {};
   for (const k of ["name", "owner", "sex", "description", "leaving"]) if (k in b) edit[k] = b[k];
-  const before = Number.isInteger(id) ? mobViews().find((v) => v.mob.id === id)?.mob : undefined;
+  const view = Number.isInteger(id) ? mobViews().find((v) => v.mob.id === id) : undefined;
+  const before = view?.mob;
+  const lh = (edit["leaving"] as { head?: unknown } | null | undefined)?.head;
+  if (view && lh !== undefined && lh !== null && lh !== "" && Number(lh) > view.state.head) {
+    res.status(400).json({ error: `${before!.name} has ${view.state.head} hd: book that many or fewer to leave` });
+    return;
+  }
   let row;
   try {
     row = before ? updateMob(id, edit) : null;
@@ -116,7 +122,7 @@ stockApi.patch("/mobs/:id", requireAdmin, (req, res) => {
   if (!row) { res.status(404).json({ error: "No such mob" }); return; }
   if (before && "leaving" in edit) {
     const l = mobLeaving(row);
-    const msg = l ? `${who(req)} booked ${row.name} to leave on ${l.date}${l.note ? ` (${l.note})` : ""}` : `${who(req)} cleared the leaving date for ${row.name}`;
+    const msg = l ? `${who(req)} booked ${l.head ? `${l.head} hd of ` : ""}${row.name} to leave on ${l.date}${l.note ? ` (${l.note})` : ""}` : `${who(req)} cleared the leaving date for ${row.name}`;
     addEvent({ ts: Date.now(), source: "stock", kind: "mob-leaving", severity: "info", message: msg, value: null });
     log.info(msg);
   }

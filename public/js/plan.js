@@ -56,7 +56,7 @@ function drawRotation(el, ctx, p) {
     : `move by <b${m.move_in <= 3 ? ' class="warnc"' : ""}>${day(m.move_by)}</b>`);
   const next = (m) => {
     const lv = m.leaving;
-    if (lv?.stays) return `Stays until it leaves on <b>${day(lv.date)}</b>${lv.note ? ` (${escapeHtml(lv.note)})` : ""}, then off from ${escapeHtml(lv.yards || "the yards")}${lv.yards_hops_now ? ` <span class="muted">· ${walkText(lv.yards_hops_now).replace("next door", "next to the yards")}${lv.yards_hops_now > 1 ? " from the yards" : ""}</span>` : lv.yards_hops_now === null && lv.yards ? ' <span class="muted">· more than 3 gates from the yards</span>' : ""}`;
+    if (lv?.stays) return `Stays until ${lv.head_staying ? `${nf(lv.head_leaving)} hd leave` : "it leaves"} on <b>${day(lv.date)}</b>${lv.note ? ` (${escapeHtml(lv.note)})` : ""}, then off from ${escapeHtml(lv.yards || "the yards")}${lv.yards_hops_now ? ` <span class="muted">· ${walkText(lv.yards_hops_now).replace("next door", "next to the yards")}${lv.yards_hops_now > 1 ? " from the yards" : ""}</span>` : lv.yards_hops_now === null && lv.yards ? ' <span class="muted">· more than 3 gates from the yards</span>' : ""}`;
     const o = m.suggested;
     if (!o) return `<span class="bad">${m.options.length ? "Every paddock with feed is taken by a more urgent mob" : `No empty paddock has ${r.min_days} days of feed`}</span>`;
     const bits = [`${feedDays(o)} days of feed`];
@@ -73,7 +73,7 @@ function drawRotation(el, ctx, p) {
       <li>
         <div>${padLinks(m)} · ${m.mob_ids.length === 1 ? `<button class="linkbtn" data-mob="${m.mob_ids[0]}">${nf(m.head)} hd</button>` : `${nf(m.head)} hd`}
           · in <b>${days(m.days_in)}</b> · ${due(m)}
-          <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}${m.leaving ? ` · <b>leaving ${day(m.leaving.date)}${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}</b>` : ""}${m.notes?.length ? ` · ${m.notes.map(escapeHtml).join("; ")}` : ""}</div></div>
+          <div class="muted tiny">${escapeHtml(m.mob)}${m.owner ? ` · ${escapeHtml(m.owner)}` : ""}${m.in_since ? ` · since ${day(m.in_since)}` : ""}${m.leaving ? ` · <b>${m.leaving.head_staying ? `${nf(m.leaving.head_leaving)} hd ` : ""}leaving ${day(m.leaving.date)}${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""}</b>` : ""}${m.notes?.length ? ` · ${m.notes.map(escapeHtml).join("; ")}` : ""}</div></div>
         <div class="small">${next(m)}</div>
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}

@@ -468,7 +468,11 @@ function leavingDialog(ctx, m) {
     <div class="dlg narrow">
       <header><h2>Booked to leave</h2><div class="muted small">${escapeHtml(m.name)} · ${m.head} hd</div></header>
       <div class="body">
-        <div class="f"><label for="lvDate">Date they leave</label><input id="lvDate" type="date" value="${escapeHtml(l.date || "")}"></div>
+        <div class="row2">
+          <div class="f"><label for="lvDate">Date they leave</label><input id="lvDate" type="date" value="${escapeHtml(l.date || "")}"></div>
+          <div class="f"><label for="lvHead">How many</label><input id="lvHead" type="number" min="1" max="${m.head}" inputmode="numeric" value="${l.head ?? ""}" placeholder="all ${m.head}"></div>
+        </div>
+        <p class="muted tiny">Leave "How many" blank if the whole mob is going.</p>
         <div class="f"><label for="lvYards">Leaving from</label>
           <select id="lvYards">${ps.map((f) => `<option value="${f.id}"${f.id === chosen ? " selected" : ""}>${escapeHtml(f.properties.name || `#${f.id}`)}${isHolding(f) ? " (holding)" : ""}</option>`).join("")}</select></div>
         <div class="f"><label for="lvNote">What for</label><input id="lvNote" placeholder="e.g. Sale, Roma saleyards" value="${escapeHtml(l.note || "")}" autocomplete="off"></div>
@@ -494,7 +498,11 @@ function leavingDialog(ctx, m) {
   $("#lvSave", d).onclick = () => {
     const date = $("#lvDate", d).value;
     if (!date) { showError(d, "Give the date they leave"); return; }
-    save({ date, yards_id: Number($("#lvYards", d).value) || null, note: $("#lvNote", d).value }, `${m.name} booked to leave on ${day(date)}`);
+    const hv = $("#lvHead", d).value.trim();
+    const head = hv === "" ? null : Number(hv);
+    if (head !== null && (!Number.isInteger(head) || head < 1 || head > m.head)) { showError(d, `How many: 1 to ${m.head}, or blank for the whole mob`); return; }
+    save({ date, yards_id: Number($("#lvYards", d).value) || null, note: $("#lvNote", d).value, head: head === m.head ? null : head },
+      `${head && head < m.head ? `${head} of ` : ""}${m.name} booked to leave on ${day(date)}`);
   };
   const clr = $("#lvClear", d);
   if (clr) clr.onclick = () => save(null, `${m.name} no longer booked to leave`);
@@ -626,7 +634,7 @@ export function mobPageHtml(ctx, m) {
     <div class="statuscard">
       <div class="big"><b>${m.head} hd</b> · ${where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
       <div class="muted small">${m.in_paddock_since ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
-      ${m.leaving ? `<div class="leavingline">Booked to leave <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` · ${escapeHtml(m.leaving.note)}` : ""}${leavingYards(ctx, m.leaving)}${daysUntil(m.leaving.date)}</div>` : ""}
+      ${m.leaving ? `<div class="leavingline">${m.leaving.head && m.leaving.head < m.head ? `<b>${m.leaving.head} of ${m.head} hd</b> booked` : "Booked"} to leave <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` · ${escapeHtml(m.leaving.note)}` : ""}${leavingYards(ctx, m.leaving)}${daysUntil(m.leaving.date)}</div>` : ""}
       ${ctx.canEdit ? `<div class="btns">
         <button class="btn primary" id="mMove">Move…</button>
         <button class="btn" id="mDraft">Draft some off…</button>

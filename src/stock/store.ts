@@ -325,12 +325,16 @@ export interface MobEdit {
  * favours one close to the yards. Kept in the mob's data, not as an event:
  * it's a plan, and the sale itself is recorded as usual when it happens.
  */
-export interface Leaving { date: string; yards_id: number | null; note: string | null }
+/** head: how many of the mob are booked to go; null for the whole mob. */
+export interface Leaving { date: string; yards_id: number | null; note: string | null; head: number | null }
 
 export function mobLeaving(mob: { data: string }): Leaving | null {
   const d = (JSON.parse(mob.data) as Record<string, unknown>)["leaving"] as Partial<Leaving> | undefined;
   if (!d || typeof d.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return null;
-  return { date: d.date, yards_id: Number.isInteger(d.yards_id) ? d.yards_id! : null, note: typeof d.note === "string" && d.note ? d.note : null };
+  return {
+    date: d.date, yards_id: Number.isInteger(d.yards_id) ? d.yards_id! : null, note: typeof d.note === "string" && d.note ? d.note : null,
+    head: Number.isInteger(d.head) && d.head! > 0 ? d.head! : null,
+  };
 }
 
 export class LeavingError extends Error {}
@@ -343,7 +347,9 @@ function cleanLeaving(v: unknown): Leaving | null {
   const y = o["yards_id"] === null || o["yards_id"] === undefined || o["yards_id"] === "" ? null : Number(o["yards_id"]);
   if (y !== null && !Number.isInteger(y)) throw new LeavingError("Choose the yards they'll leave from");
   const note = typeof o["note"] === "string" && o["note"].trim() ? o["note"].trim().slice(0, 120) : null;
-  return { date, yards_id: y, note };
+  const h = o["head"] === null || o["head"] === undefined || o["head"] === "" ? null : Number(o["head"]);
+  if (h !== null && (!Number.isInteger(h) || h <= 0)) throw new LeavingError("How many are leaving: a whole number, or leave it blank for the whole mob");
+  return { date, yards_id: y, note, head: h };
 }
 
 /**
