@@ -103,7 +103,7 @@ export async function renderAnimal(ctx, id, root) {
       <dt>Origin</dt><dd>${escapeHtml(a.origin || "—")}</dd>
       ${sale?.data?.price != null ? `<dt>Sold for</dt><dd>${sale.data.price_unit === "c/kg" ? `${nf1.format(sale.data.price)} c/kg` : `${nf0.format(sale.data.price)} /hd`}</dd>` : ""}
     </dl>
-    ${ctx.canEdit ? `<details><summary class="small">Edit details</summary>
+    ${ctx.canEdit ? `<details class="editbox" id="dBox"><summary class="btn">Edit details</summary>
       <div class="row2">
         <div class="f"><label for="dTag">Tag</label><input id="dTag" value="${escapeHtml(a.tag || "")}" autocomplete="off"></div>
         <div class="f"><label for="dSex">Sex</label><select id="dSex">${["", "female", "steer", "male", "stag"].map((x) => `<option value="${x}"${x === (a.sex || "") ? " selected" : ""}>${x ? SEX[x] : "unknown"}</option>`).join("")}</select></div>
@@ -197,6 +197,12 @@ export async function renderAnimal(ctx, id, root) {
       }
     };
   });
+  // Save turns blue once something in the form differs from what's saved.
+  const dBox = $("#dBox", root);
+  const dFields = dBox ? [...dBox.querySelectorAll("input, select")] : [];
+  const dWas = dFields.map((f) => f.value);
+  const dMark = () => $("#dSave", root)?.classList.toggle("primary", dFields.some((f, i) => f.value !== dWas[i]));
+  dFields.forEach((f) => { f.addEventListener("input", dMark); f.addEventListener("change", dMark); });
   $("#dSave", root)?.addEventListener("click", async () => {
     try {
       await send("PATCH", `/api/animals/${id}`, {
