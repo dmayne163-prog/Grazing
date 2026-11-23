@@ -12,8 +12,8 @@ import { config } from "../config.js";
 import { db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { today } from "../stock/store.js";
-import { gotoPreset } from "./nvr-http.js";
-import { cleanRoi, measure, type Roi } from "./greenness.js";
+import { findClips, gotoPreset } from "./nvr-http.js";
+import { asRoi, cleanRoi, measure, type Roi } from "./greenness.js";
 
 const log = logger("cameras");
 export const CAMERA_DIR = join(config.dataDir, "cameras");
@@ -24,11 +24,12 @@ export interface Shot {
   id: number; camera_id: number; feature_id: number; taken_on: string; taken_at: number; file: string; bytes: number;
   /** Greenness in the camera's grass box (null: no box, or not read yet); gcc_ok 0 with gcc_why: a picture that can't be trusted. */
   gcc: number | null; gcc_ok: number | null; gcc_why: string | null; gcc_roi: string | null;
+  from_recording: number | null;
 }
 type CameraRow = Omit<Camera, "roi"> & { roi: string | null };
 const fromRow = (r: CameraRow): Camera => {
   let roi: Roi | null = null;
-  try { roi = r.roi ? (JSON.parse(r.roi) as Roi) : null; } catch { roi = null; }
+  try { roi = r.roi ? asRoi(JSON.parse(r.roi)) : null; } catch { roi = null; }
   return { ...r, roi };
 };
 
@@ -99,13 +100,21 @@ function streamUrl(channel: number): string {
   return `rtsp://${auth}@${config.nvrHost}:${config.nvrRtspPort}/cam/realmonitor?channel=${channel}&subtype=0`;
 }
 
-/** One frame of a channel's live video into a JPEG file, at most 1920 px wide. */
-function grabFrame(channel: number, out: string): Promise<void> {
+/** A recording's RTSP address from a local time on ("YYYY-MM-DD HH:MM:SS"), for 20 seconds. */
+function playbackUrl(channel: number, from: string): string {
+  const auth = `${encodeURIComponent(config.nvrUser)}:${encodeURIComponent(config.nvrPass)}`;
+  const t0 = Date.parse(from.replace(" ", "T"));
+  const fmt = (ms: number) => { const d = new Date(ms); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}_${p(d.getMonth() + 1)}_${p(d.getDate())}_${p(d.getHours())}_${p(d.getMinutes())}_${p(d.getSeconds())}`; };
+  return `rtsp://${auth}@${config.nvrHost}:${config.nvrRtspPort}/cam/playback?channel=${channel}&starttime=${fmt(t0)}&endtime=${fmt(t0 + 20_000)}`;
+}
+
+/** One frame of a channel's live video (or of a recording, from a local time) into a JPEG file, at most 1920 px wide. */
+function grabFrame(channel: number, out: string, recordedAt?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
-      "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", streamUrl(channel),
-      // Skip the first second: the picture settles once a full frame has arrived.
-      "-ss", "1", "-frames:v", "1", "-vf", "scale='min(1920,iw)':-2", "-q:v", "3", "-y", out,
+      "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", recordedAt ? playbackUrl(channel, recordedAt) : streamUrl(channel),
+      // Live: skip the first second, the picture settles once a full frame has arrived.
+      ...(recordedAt ? [] : ["-ss", "1"]), "-frames:v", "1", "-vf", "scale='min(1920,iw)':-2", "-q:v", "3", "-y", out,
     ];
     const p = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
@@ -249,4 +258,98 @@ export function scoreMissing(): Promise<number> {
     return n;
   })().finally(() => { scoring = null; });
   return scoring;
+}
+
+/* ------------------------- past days from recordings ------------------------ */
+
+/*
+ * The NVR keeps months of motion-triggered clips. For each past day without a
+ * picture, up to three clips are taken across the morning (nearest 9:30,
+ * 10:30 and 11:30) and the one with the middle greenness kept, so cattle
+ * walking through one of them (what set the recording off) don't skew the
+ * day. Without a grass area the clip nearest 10:30 is kept. Fixed cameras
+ * only: a turning camera's past pointing isn't known.
+ */
+export interface HistoryRun { camera_id: number; name: string; from: string; to: string; day: string | null; done: number; added: number; total: number; finished: boolean; error: string | null }
+const runs = new Map<number, HistoryRun>();
+export const historyRun = (cameraId: number) => runs.get(cameraId) ?? null;
+
+const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const TARGETS = ["09:30:00", "10:30:00", "11:30:00"];
+
+export function startHistory(cam: Camera, from: string): HistoryRun {
+  if (!camerasOn()) throw new CameraError("No camera NVR is set up on the server");
+  if (cam.preset !== null) throw new CameraError("A turning camera's past days can't be filled in: where it pointed then isn't known");
+  if (runs.get(cam.id) && !runs.get(cam.id)!.finished) return runs.get(cam.id)!;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new CameraError("From: a date");
+  const days: string[] = [];
+  const end = new Date(`${today()}T00:00:00`);
+  for (let d = new Date(`${from}T00:00:00`); d < end; d.setDate(d.getDate() + 1)) days.push(isoDay(d));
+  const run: HistoryRun = { camera_id: cam.id, name: cam.name, from, to: days[days.length - 1] ?? from, day: null, done: 0, added: 0, total: days.length, finished: false, error: null };
+  runs.set(cam.id, run);
+  void (async () => {
+    try {
+      for (const day of [...days].reverse()) { // newest first: the useful end fills in first
+        run.day = day;
+        const has = db.prepare("SELECT 1 FROM camera_shots WHERE camera_id = ? AND taken_on = ?").get(cam.id, day);
+        if (!has && await historyDay(cam, day)) run.added++;
+        run.done++;
+      }
+    } catch (e) {
+      run.error = e instanceof Error ? e.message : String(e);
+      log.warn(`filling in ${cam.name}: ${run.error}`);
+    } finally {
+      run.finished = true; run.day = null;
+      log.info(`filled in ${run.added} past day(s) for ${cam.name} from the NVR's recordings`);
+    }
+  })();
+  return run;
+}
+
+async function historyDay(cam: Camera, day: string): Promise<boolean> {
+  const clips = await findClips(cam.channel, `${day} 08:30:00`, `${day} 12:30:00`);
+  if (!clips.length) return false;
+  const secs = (t: string) => Date.parse(t.replace(" ", "T")) / 1000;
+  // The clip nearest each target time, two seconds in (past the motion that started it).
+  const picks = [...new Set(TARGETS.map((t) => {
+    const want = secs(`${day} ${t}`);
+    return clips.reduce((best, c) => (Math.abs(secs(c.start) - want) < Math.abs(secs(best.start) - want) ? c : best)).start;
+  }))];
+  const dir = join(CAMERA_DIR, String(cam.id));
+  mkdirSync(dir, { recursive: true });
+  const tries: Array<{ tmp: string; at: string; gcc: number | null; ok: boolean; why: string | null }> = [];
+  for (const start of picks) {
+    const at = new Date((secs(start) + 2) * 1000);
+    const atStr = `${isoDay(at)} ${at.toTimeString().slice(0, 8)}`;
+    const tmp = join(dir, `${day}.try${tries.length}.jpg`);
+    try {
+      await grabFrame(cam.channel, tmp, atStr);
+      if (statSync(tmp).size < 2000) { unlinkSync(tmp); continue; }
+      const g = cam.roi ? await measure(tmp, cam.roi).catch(() => null) : null;
+      tries.push({ tmp, at: atStr, gcc: g?.gcc ?? null, ok: !!g?.ok, why: g?.why ?? null });
+      if (!cam.roi) break; // nothing to compare: the first good one does
+    } catch { try { unlinkSync(tmp); } catch { /* none */ } }
+  }
+  if (!tries.length) return false;
+  // The middle score of the trusted ones; else the first.
+  const good = tries.filter((t) => t.ok && t.gcc !== null).sort((a, b) => a.gcc! - b.gcc!);
+  const keep = good.length ? good[Math.floor((good.length - 1) / 2)]! : tries[0]!;
+  const file = `${cam.id}/${day}.jpg`;
+  renameSync(keep.tmp, join(CAMERA_DIR, file));
+  for (const t of tries) if (t !== keep) try { unlinkSync(t.tmp); } catch { /* gone */ }
+  db.prepare(`INSERT INTO camera_shots (camera_id, feature_id, taken_on, taken_at, file, bytes, gcc, gcc_ok, gcc_why, gcc_roi, from_recording)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(cam.id, cam.feature_id, day, Date.parse(keep.at.replace(" ", "T")), file, statSync(join(CAMERA_DIR, file)).size,
+    keep.gcc, cam.roi ? (keep.ok ? 1 : 0) : null, keep.why, cam.roi ? JSON.stringify(cam.roi) : null);
+  return true;
+}
+
+/** The oldest day the NVR still has recordings for on a channel (searched month by month from a year back). */
+export async function oldestRecording(channel: number): Promise<string | null> {
+  const now = new Date();
+  for (let back = 12; back >= 0; back--) {
+    const a = new Date(now.getFullYear(), now.getMonth() - back, 1), b = new Date(now.getFullYear(), now.getMonth() - back + 1, 1);
+    const clips = await findClips(channel, `${isoDay(a)} 00:00:00`, `${isoDay(b)} 00:00:00`);
+    if (clips.length) return clips[0]!.start.slice(0, 10);
+  }
+  return null;
 }

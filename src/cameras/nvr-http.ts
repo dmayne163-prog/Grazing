@@ -38,3 +38,33 @@ export async function gotoPreset(channel: number, preset: number): Promise<void>
       : `The NVR wouldn't turn channel ${channel} to preset ${preset} (HTTP ${r.status})`);
   }
 }
+
+/** The NVR's recorded clips on a channel between two local times ("YYYY-MM-DD HH:MM:SS"), oldest first. */
+export async function findClips(channel: number, from: string, to: string): Promise<Array<{ start: string; end: string }>> {
+  const made = await nvrGet("/cgi-bin/mediaFileFind.cgi?action=factory.create");
+  const obj = /result=(\d+)/.exec(made.text)?.[1];
+  if (made.status !== 200 || !obj) throw new Error(`The NVR wouldn't search its recordings (HTTP ${made.status})`);
+  const q = (v: string) => encodeURIComponent(v);
+  try {
+    const f = await nvrGet(`/cgi-bin/mediaFileFind.cgi?action=findFile&object=${obj}&condition.Channel=${channel}&condition.StartTime=${q(from)}&condition.EndTime=${q(to)}`);
+    if (f.status !== 200) return []; // nothing recorded in that window
+    const out: Array<{ start: string; end: string }> = [];
+    for (let page = 0; page < 20; page++) {
+      const n = await nvrGet(`/cgi-bin/mediaFileFind.cgi?action=findNextFile&object=${obj}&count=100`);
+      const found = Number(/found=(\d+)/.exec(n.text)?.[1] ?? 0);
+      if (!found) break;
+      const items = new Map<string, { start?: string; end?: string }>();
+      for (const m of n.text.matchAll(/items\[(\d+)\]\.(StartTime|EndTime)=([^\r\n]+)/g)) {
+        const it = items.get(m[1]!) ?? {};
+        if (m[2] === "StartTime") it.start = m[3]!.trim(); else it.end = m[3]!.trim();
+        items.set(m[1]!, it);
+      }
+      for (const it of items.values()) if (it.start && it.end) out.push({ start: it.start, end: it.end });
+      if (found < 100) break;
+    }
+    return out.sort((a, b) => a.start.localeCompare(b.start));
+  } finally {
+    await nvrGet(`/cgi-bin/mediaFileFind.cgi?action=close&object=${obj}`).catch(() => undefined);
+    await nvrGet(`/cgi-bin/mediaFileFind.cgi?action=destroy&object=${obj}`).catch(() => undefined);
+  }
+}

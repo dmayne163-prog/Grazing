@@ -732,9 +732,15 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .roipick { touch-action: none; user-select: none; cursor: crosshair; }
 .roipick { display: block; width: fit-content; max-width: 100%; margin: 0 auto; }
 .roipick img { display: block; max-width: 100%; max-height: 55vh; width: auto; height: auto; border-radius: 6px; pointer-events: none; }
-.roibox { position: absolute; border: 2px solid #ffd400; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: none; }
+.roisvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.roisvg .roiline { fill: rgba(255, 212, 0, 0.12); stroke: #ffd400; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.roisvg polyline.roiline { fill: none; stroke-dasharray: 4 3; }
+.roihandle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #ffd400; border: 2px solid #000; pointer-events: none; }
 .greenline { margin-top: 4px; }
-.greenchart { display: block; width: 100%; height: 70px; margin: 4px 0; }
+.greenchart { display: block; width: 100%; height: 80px; margin: 4px 0; }
+.greenchart .gp { cursor: pointer; }
+.greenchart .gp.rec { fill: #8bc34a; }
+.greenchart .gm { stroke: currentColor; stroke-width: 0.5; opacity: 0.2; }
 .greenchart .gl { fill: none; stroke: #4caf50; stroke-width: 1.5; }
 .greenchart .gp { fill: #4caf50; }
 .greenchart .gp.on { fill: #ffd400; stroke: #000; stroke-width: 1; r: 4; }

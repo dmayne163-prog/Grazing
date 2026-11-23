@@ -5,7 +5,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { logger } from "../logger.js";
 import {
-  addCamera, CAMERA_DIR, CameraError, camerasOn, getCamera, getShot, listCameras, listShots, removeCamera, takeShot, updateCamera,
+  addCamera, CAMERA_DIR, CameraError, camerasOn, getCamera, getShot, historyRun, listCameras, listShots, oldestRecording, removeCamera, startHistory, takeShot, updateCamera,
 } from "../cameras/cameras.js";
 
 const log = logger("cameras");
@@ -27,7 +27,8 @@ function fail(res: import("express").Response, e: unknown, what: string) {
 cameraApi.get("/cameras", (req, res) => {
   const id = Number(req.query["paddock"]);
   if (!Number.isInteger(id)) { res.json({ on: camerasOn(), cameras: listCameras() }); return; }
-  res.json({ on: camerasOn(), cameras: listCameras(id), shots: listShots(id).map(({ file: _f, ...s }) => s) });
+  const cameras = listCameras(id);
+  res.json({ on: camerasOn(), cameras: cameras.map((c) => ({ ...c, history: historyRun(c.id) })), shots: listShots(id, 1000).map(({ file: _f, ...s }) => s) });
 });
 
 cameraApi.post("/cameras", requireAdmin, (req, res) => {
@@ -63,6 +64,29 @@ cameraApi.post("/cameras/:id/shot", requireAdmin, async (req, res) => {
     const { file: _f, ...shot } = s;
     res.json({ ok: true, shot });
   } catch (e) { fail(res, e, "taking the picture"); }
+});
+
+/** How far back the NVR's recordings go for a camera. */
+cameraApi.get("/cameras/:id/recordings", requireAdmin, async (req, res) => {
+  const c = getCamera(Number(req.params["id"]));
+  if (!c) { res.status(404).json({ error: "No such camera" }); return; }
+  try { res.json({ oldest: await oldestRecording(c.channel), run: historyRun(c.id) }); }
+  catch (e) { fail(res, e, "searching the recordings"); }
+});
+
+/** Fill in past days from the NVR's recordings, from a date to yesterday (in the background). */
+cameraApi.post("/cameras/:id/history", requireAdmin, (req, res) => {
+  const c = getCamera(Number(req.params["id"]));
+  if (!c) { res.status(404).json({ error: "No such camera" }); return; }
+  try {
+    const run = startHistory(c, String((req.body as Record<string, unknown>)?.["from"] ?? ""));
+    logIt(req, `started filling in ${c.name} from the NVR's recordings since ${run.from}`);
+    res.json({ ok: true, run });
+  } catch (e) { fail(res, e, "starting the fill-in"); }
+});
+
+cameraApi.get("/cameras/:id/history", (req, res) => {
+  res.json({ run: historyRun(Number(req.params["id"])) });
 });
 
 /** One picture. Pictures never change once taken (a retake gets a new id), so they can be kept. */

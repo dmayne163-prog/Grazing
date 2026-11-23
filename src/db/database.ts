@@ -616,7 +616,8 @@ CREATE TABLE IF NOT EXISTS settings (
   if (!cameraCols.includes("roi")) db.exec("ALTER TABLE cameras ADD COLUMN roi TEXT");
   // Each picture's greenness (green share of the light in that box), and the box it was read from.
   const shotCols = (db.pragma("table_info(camera_shots)") as Array<{ name: string }>).map((c) => c.name);
-  for (const [col, type] of [["gcc", "REAL"], ["gcc_ok", "INTEGER"], ["gcc_why", "TEXT"], ["gcc_roi", "TEXT"]] as const) {
+  // from_recording: 1 for a picture taken afterwards from the NVR's recordings (filling in past days).
+  for (const [col, type] of [["gcc", "REAL"], ["gcc_ok", "INTEGER"], ["gcc_why", "TEXT"], ["gcc_roi", "TEXT"], ["from_recording", "INTEGER"]] as const) {
     if (!shotCols.includes(col)) db.exec(`ALTER TABLE camera_shots ADD COLUMN ${col} ${type}`);
   }
 }
