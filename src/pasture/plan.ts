@@ -219,7 +219,20 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     }
     return c;
   };
+  // David's own say on each paddock beats the map: "easy" (a laneway or
+  // short muster to the yards) or "hard" (timbered, a long muster).
+  const access = new Map<number, string>();
+  for (const f of paddockRows) {
+    const a = (JSON.parse(f.props || "{}") as Record<string, unknown>)["yards_access"];
+    if (a === "easy" || a === "hard") access.set(f.id, a);
+  }
+  const accessOf = (from: number[]) => from.some((id) => access.get(id) === "easy") ? "easy"
+    : from.every((id) => access.get(id) === "hard") ? "hard" : null;
   const yardsHopsOf = (from: number[], yardsId: number): number | null => {
+    if (from.includes(yardsId)) return 0;
+    const a = accessOf(from);
+    if (a === "easy") return 1;
+    if (a === "hard") return null;
     const { near } = yardsInfo(yardsId);
     if (from.includes(yardsId) || from.some((id) => near.has(id))) return from.includes(yardsId) ? 0 : 1;
     let best: number | null = null;
@@ -310,7 +323,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
           paddock_id: o.paddock_id, name: p.name, area_ha: p.area_ha, now: o.now, reading: p.last_reading,
           stay, days: o.days, rest_days: rest, rest_counts: restCounts, rest_weight: weight, adjacent, score: Math.round(score * 10) / 10,
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
-          confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar,
+          confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar, yards_access: access.get(o.paddock_id) ?? null,
           facts: {
             reading: p.reading, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,

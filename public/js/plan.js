@@ -64,7 +64,7 @@ function drawRotation(el, ctx, p) {
     if (o.gates_away) bits.push(walkText(o.gates_away));
     if (lv?.last) {
       bits[0] = `needs ${days(lv.need)} of feed, has ${feedDays(o)}`;
-      bits.push(o.yards_hops ? `${o.yards_hops === 1 ? "next to" : `${o.yards_hops} gates from`} ${escapeHtml(lv.yards || "the yards")}` : `${o.yards_km != null ? `${o.yards_km} km` : "far"} from ${escapeHtml(lv.yards || "the yards")}`);
+      bits.push(o.yards_access === "easy" ? `easy to ${escapeHtml(lv.yards || "the yards")}` : o.yards_access === "hard" ? "hard muster" : o.yards_hops ? `${o.yards_hops === 1 ? "next to" : `${o.yards_hops} gates from`} ${escapeHtml(lv.yards || "the yards")}` : `${o.yards_km != null ? `${o.yards_km} km` : "far"} from ${escapeHtml(lv.yards || "the yards")}`);
     }
     return `${lv?.last ? `Last paddock before it leaves ${day(lv.date)} → ` : "Next → "}<button class="linkbtn strong" data-why="${p.mobs.indexOf(m)}:${o.paddock_id}" title="Why this paddock?">${escapeHtml(o.name)} ⓘ</button> <span class="muted">· ${bits.join(" · ")}</span>`;
   };
@@ -147,7 +147,7 @@ function explain(ctx, p, mi, pid, back) {
           It lasts until it's grazed down to ${nf(r.residual)} kg/ha: <b>${feedDays(o)} days</b> in a typical season and <b>${o.days.low >= FEED_HORIZON ? `${FEED_HORIZON}+` : nf(o.days.low)} days</b> in a drier one (the driest fifth of past seasons).</p>
         ${m.leaving?.last ? `<ul class="small">
           <li><b>Feed (${o.parts.feed}):</b> lasting the ${days(m.leaving.need)} until it leaves, even in a drier season, adds up to 20.</li>
-          <li><b>Near the yards (${o.parts.yards}):</b> ${o.yards_hops === 1 ? `its fence is within 150 m of ${escapeHtml(m.leaving.yards || "the yards")}` : o.yards_hops ? `${o.yards_hops} gates from a paddock next to ${escapeHtml(m.leaving.yards || "the yards")}` : `more than three gates from ${escapeHtml(m.leaving.yards || "the yards")}`}${o.yards_km ? ` (${o.yards_km} km fence to fence)` : ""}.</li>
+          <li><b>Near the yards (${o.parts.yards}):</b> ${o.yards_access === "easy" ? `marked as an easy muster to the yards (a laneway or close by)` : o.yards_access === "hard" ? `marked as a hard muster (timbered or long), so it gets nothing here` : o.yards_hops === 1 ? `its fence is within 150 m of ${escapeHtml(m.leaving.yards || "the yards")}` : o.yards_hops ? `${o.yards_hops} gates from a paddock next to ${escapeHtml(m.leaving.yards || "the yards")}` : `more than three gates from ${escapeHtml(m.leaving.yards || "the yards")}`}${o.yards_km ? ` (${o.yards_km} km fence to fence)` : ""}.</li>
         </ul>` : `<ul class="small">
           <li><b>Feed (${o.parts.feed}):</b> days it lasts up to your ${r.max_days}-day longest stay, half from the typical season and half from the drier one, so a paddock that only lasts if it rains scores less.</li>
           <li><b>Spare feed (${o.parts.margin}):</b> each day of typical-season feed past ${r.max_days} days counts a quarter, up to ${FEED_HORIZON} days. It's a safety margin if it turns dry.</li>

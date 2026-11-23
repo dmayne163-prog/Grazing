@@ -1035,6 +1035,14 @@ function kindFields(kind, props) {
     <div class="row2">
       <div class="f"><label for="fCrop">Pasture / crop</label><input id="fCrop" value="${v("crop")}" placeholder="e.g. Natural grasses"></div>
       <div class="f"><label for="fGraz">Grazable ha</label><input id="fGraz" type="number" min="0" step="0.1" value="${v("grazable_ha")}" placeholder="all of it"></div>
+    </div>
+    <div class="f"><label for="fYards">Getting cattle to the yards</label>
+      <select id="fYards">
+        <option value=""${!props?.yards_access ? " selected" : ""}>Work it out from the map</option>
+        <option value="easy"${props?.yards_access === "easy" ? " selected" : ""}>Easy: a laneway or short muster to the yards</option>
+        <option value="hard"${props?.yards_access === "hard" ? " selected" : ""}>Hard: timbered or a long muster</option>
+      </select>
+      <p class="muted tiny">Used by the Rotation tab for a mob's last paddock before it leaves, so it can be got to the yards quickly if the trucking date changes.</p>
     </div>`;
   if (kind === "water") return `
     <div class="f"><label for="fCap">Capacity (litres)</label><input id="fCap" type="number" min="0" step="100" value="${v("capacity_l")}"></div>`;
@@ -1048,6 +1056,7 @@ function readKindFields(kind, props) {
     set("crop", $("#fCrop")?.value.trim());
     const g = $("#fGraz")?.value;
     set("grazable_ha", g === "" ? "" : Number(g));
+    set("yards_access", $("#fYards")?.value || "");
   }
   if (kind === "water") {
     const c = $("#fCap")?.value;
@@ -1107,6 +1116,7 @@ function featureHtml(f) {
     facts.push(["Open to", `<span class="inuse">${openTo.map((id) => escapeHtml(state.byId.get(id)?.properties.name ?? "")).join(", ")}</span>${via.length ? ` <span class="muted">via ${via.map(escapeHtml).join(", ")}</span>` : ""}`]);
   }
   if (props.grazable_ha) facts.push(["Grazable", ha(Number(props.grazable_ha))]);
+  if (props.yards_access) facts.push(["To the yards", props.yards_access === "easy" ? "Easy (laneway or short muster)" : "Hard (timbered or long muster)"]);
   if (props.agriwebb_area_ha && !isPaddock) facts.push(["AgriWebb said", ha(Number(props.agriwebb_area_ha))]);
   if (p.length_m != null) facts.push(["Length", km(p.length_m)]);
   if (inPaddock) facts.push(["In paddock", escapeHtml(inPaddock.properties.name)]);
