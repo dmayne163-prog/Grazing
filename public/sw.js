@@ -18,7 +18,7 @@
  */
 
 // Bumped when the caching rules change, so phones drop copies kept under the old ones.
-const STATIC = "static-v22";
+const STATIC = "static-v23";
 const DATA = "data-v2";
 const PHOTOS = "photos-v1";
 const TILES = "tiles-qld";

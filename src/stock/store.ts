@@ -183,6 +183,11 @@ export interface MobState {
   adg_kg: number | null;
   /** Since this date the mob has been where it is now. */
   in_paddock_since: string | null;
+  /**
+   * Not in any known paddock: missed at a muster, somewhere on the property.
+   * Where they were last seen, and since when. Cleared by the next move.
+   */
+  unaccounted: { since: string; last_seen: number[]; note: string | null } | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -192,7 +197,7 @@ const daysBetween = (a: string, b: string) =>
 function fold(events: MobEventRow[], asOf: string): MobState {
   const s: MobState = {
     head: 0, paddock_ids: [], weight_kg: null, est_weight_kg: null,
-    last_weighed: null, adg_kg: null, in_paddock_since: null,
+    last_weighed: null, adg_kg: null, in_paddock_since: null, unaccounted: null,
   };
   let started = false;
   for (const e of events) {
@@ -206,6 +211,13 @@ function fold(events: MobEventRow[], asOf: string): MobState {
     if (e.paddock_ids !== null && (e.kind === "opening" || e.kind === "move")) {
       const next = JSON.parse(e.paddock_ids) as number[];
       if (e.kind === "move" || s.in_paddock_since === null) s.in_paddock_since = e.date;
+      if (next.length) s.unaccounted = null;
+      else {
+        const d = JSON.parse(e.data || "{}") as { unaccounted?: boolean; last_seen?: number[]; note?: string };
+        s.unaccounted = d.unaccounted
+          ? { since: e.date, last_seen: d.last_seen ?? s.paddock_ids, note: typeof d.note === "string" ? d.note : null }
+          : null;
+      }
       s.paddock_ids = next;
     }
     if (e.weight_kg !== null) {

@@ -56,6 +56,12 @@ function paddockIds(ids: unknown): number[] {
   return out;
 }
 
+/** Where stock is going: paddocks, or "unaccounted" (missed at a muster, whereabouts unknown). */
+export const UNACCOUNTED = "unaccounted";
+/** Where they were last seen: real paddocks only, not a holding place like AgriWebb's "lost boys and girls". */
+const seenIn = (ids: number[]) => ids.filter((id) => getFeature(id)?.subtype !== "management only");
+const isUnaccounted = (to: unknown) => to === UNACCOUNTED || (Array.isArray(to) && to.length === 1 && to[0] === UNACCOUNTED);
+
 function mobAt(id: number, when: When): MobView {
   const v = mobViews(when.date, when.time).find((x) => x.mob.id === id);
   if (!v) throw new StockError("That mob had no head on that date — it may not have existed yet, or was already sold");
@@ -138,14 +144,18 @@ export function withOpenGates(dest: number[], when: When): number[] {
 export function moveMobs(
   mobIds: number[], to: unknown, when: When, note: string | null, username: string | null
 ): string {
-  const dest = withOpenGates(paddockIds(to), when);
+  const lost = isUnaccounted(to);
+  const dest = lost ? [] : withOpenGates(paddockIds(to), when);
   if (mobIds.length === 0) throw new StockError("Choose a mob to move");
   const batch = randomUUID();
   db.transaction(() => {
     for (const id of new Set(mobIds)) {
-      mobAt(id, when);
-      addEvent(id, { date: when.date, time: when.time, kind: "move", paddock_ids: dest, data: note ? { note } : {} },
-        "app", username, batch);
+      const v = mobAt(id, when);
+      if (lost && v.state.unaccounted) throw new StockError(`${v.mob.name} is already unaccounted for`);
+      addEvent(id, {
+        date: when.date, time: when.time, kind: "move", paddock_ids: dest,
+        data: { ...(note ? { note } : {}), ...(lost ? { unaccounted: true, last_seen: seenIn(v.state.paddock_ids) } : {}) },
+      }, "app", username, batch);
     }
   })();
   return batch;
@@ -174,7 +184,8 @@ export function draftMob(mobId: number, input: DraftInput, when: When, username:
   if (head >= parent.state.head) {
     throw new StockError(`That is the whole mob (${parent.state.head} hd) — move the mob instead`);
   }
-  const dest = withOpenGates(paddockIds(input.to), when);
+  const lost = isUnaccounted(input.to);
+  const dest = lost ? [] : withOpenGates(paddockIds(input.to), when);
   const weight = input.weight_kg === undefined || input.weight_kg === null || input.weight_kg === ""
     ? null : Number(input.weight_kg);
   if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1500)) {
@@ -194,7 +205,7 @@ export function draftMob(mobId: number, input: DraftInput, when: When, username:
       data: { drafted_from: p.id },
     }, [
       { date: when.date, time: when.time, kind: "opening", head, paddock_ids: dest,
-        data: { from_mob: p.id, how: "draft", ...(note ? { note } : {}) } },
+        data: { from_mob: p.id, how: "draft", ...(note ? { note } : {}), ...(lost ? { unaccounted: true, last_seen: seenIn(parent.state.paddock_ids) } : {}) } },
       ...(weight !== null || parent.state.est_weight_kg !== null ? [{
         date: when.date, time: when.time, kind: "weigh" as const,
         weight_kg: weight ?? parent.state.est_weight_kg, adg_kg: weight === null ? parent.state.adg_kg : null,
@@ -203,7 +214,7 @@ export function draftMob(mobId: number, input: DraftInput, when: When, username:
     ], "app", username, batch);
     addEvent(p.id, {
       date: when.date, time: when.time, kind: "transfer", head_change: -head,
-      data: { to_mob: id, to_paddocks: dest, ...(note ? { note } : {}) },
+      data: { to_mob: id, to_paddocks: dest, ...(note ? { note } : {}), ...(lost ? { unaccounted: true } : {}) },
     }, "app", username, batch);
     return id;
   })();

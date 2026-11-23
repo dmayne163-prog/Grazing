@@ -102,21 +102,24 @@ export function openMoveDialog(ctx, m, dest) {
   const dialog = ctx.dialog;
   const where = m.paddocks.map((p) => p.name).join(" + ");
   const home = m.paddock_ids[0];
-  const others = ctx.state.mobs.filter((x) => x.id !== m.id && x.paddock_ids[0] === home);
+  const others = home === undefined ? [] : ctx.state.mobs.filter((x) => x.id !== m.id && x.paddock_ids[0] === home);
+  // Missed at a muster: off the map, listed under Unaccounted for until found.
+  const lostOpt = m.unaccounted ? "" : '<option value="unaccounted">Unaccounted for: not found at the muster</option>';
   const choices = paddocksOf(ctx).filter((f) => f.id !== home);
 
   dialog.innerHTML = `
     <div class="dlg narrow">
       <header>
         <h2>Move ${escapeHtml(m.name)}</h2>
-        <div class="muted small">${m.head} hd · now in ${escapeHtml(where)}${m.owner ? ` · ${escapeHtml(m.owner)}'s` : ""}</div>
+        <div class="muted small">${m.head} hd · ${m.unaccounted ? "unaccounted for" : `now in ${escapeHtml(where)}`}${m.owner ? ` · ${escapeHtml(m.owner)}'s` : ""}</div>
       </header>
       <div class="body">
         <div class="f"><label for="mvTo">To</label>
           ${dest
             ? `<div class="dest">${escapeHtml(dest.properties.name)}</div>`
-            : `<select id="mvTo"><option value="">Choose a paddock…</option>${choices.map((f) => `<option value="${f.id}">${escapeHtml(f.properties.name)}</option>`).join("")}</select>`}
+            : `<select id="mvTo"><option value="">${m.unaccounted ? "Where were they found?" : "Choose a paddock…"}</option>${lostOpt}${choices.map((f) => `<option value="${f.id}">${escapeHtml(f.properties.name)}</option>`).join("")}</select>`}
           <p class="small" id="mvReach" hidden></p>
+          <p class="small note" id="mvLostHint" hidden>They come off the map and are listed under <b>Unaccounted for</b> on the Mobs tab, with where they were last seen and for how long. They still count in the head totals. When they turn up, move them to the paddock they were found in.</p>
         </div>
         <div class="f"><label>How many</label>
           <div class="radios">
@@ -145,7 +148,7 @@ export function openMoveDialog(ctx, m, dest) {
               <p class="muted tiny" id="mvPickCount"></p>
             </div>
           </div>
-          <p class="muted small">They become a separate mob in the new paddock. ${escapeHtml(m.name)} keeps the rest where they are.</p>
+          <p class="muted small" id="mvSomeHint">They become a separate mob in the new paddock. ${escapeHtml(m.name)} keeps the rest where they are.</p>
         </div>
         ${others.length ? `<div class="f" id="mvOthers"><label>Also move</label>
           ${others.map((o) => `<label class="radio"><input type="checkbox" value="${o.id}"> ${escapeHtml(o.name)} <span class="muted">${o.head} hd</span></label>`).join("")}
@@ -274,10 +277,19 @@ export function openMoveDialog(ctx, m, dest) {
   // Gates open into the destination at that moment: the stock get those paddocks too.
   let reach = null;
   let asked = 0;
+  const lostPicked = () => !dest && $("#mvTo", dialog)?.value === "unaccounted";
   const showReach = async () => {
     const to = dest ? dest.id : Number($("#mvTo", dialog).value);
     const box = $("#mvReach", dialog);
     reach = null;
+    const lost = lostPicked();
+    $("#mvLostHint", dialog).hidden = !lost;
+    $("#mvSomeHint", dialog).textContent = lost
+      ? `They become a separate mob, unaccounted for. ${m.name} keeps the rest where they are.`
+      : `They become a separate mob in the new paddock. ${m.name} keeps the rest where they are.`;
+    const nm = $("#mvName", dialog);
+    if (lost && nm.value === `${m.name} (draft)`) nm.value = `${m.name} · not mustered`;
+    if (!lost && nm.value === `${m.name} · not mustered`) nm.value = `${m.name} (draft)`;
     if (!to) { box.hidden = true; return; }
     const mine = ++asked;
     try {
@@ -302,10 +314,11 @@ export function openMoveDialog(ctx, m, dest) {
   $("#mvGo", dialog).onclick = async () => {
     const btn = $("#mvGo", dialog);
     try {
-      const to = dest ? dest.id : Number($("#mvTo", dialog).value);
-      if (!to) throw new Error("Choose where they went");
+      const lost = lostPicked();
+      const to = lost ? "unaccounted" : dest ? dest.id : Number($("#mvTo", dialog).value);
+      if (!to) throw new Error(m.unaccounted ? "Choose the paddock they were found in" : "Choose where they went");
       const when = readWhen(dialog, "mv");
-      const toName = reach && reach.names.length > 1 ? reach.names.join(" + ") : paddockName(ctx, to);
+      const toName = lost ? "Unaccounted for" : reach && reach.names.length > 1 ? reach.names.join(" + ") : paddockName(ctx, to);
       btn.disabled = true;
       if (some()) {
         const head = Number($("#mvHead", dialog).value);
@@ -313,7 +326,7 @@ export function openMoveDialog(ctx, m, dest) {
           throw new Error(`Enter how many moved: 1 to ${m.head - 1}. For all ${m.head}, choose the whole mob.`);
         }
         const r = await send("POST", `/api/mobs/${m.id}/draft`, {
-          head, to: [to], ...when,
+          head, to: lost ? to : [to], ...when,
           name: $("#mvName", dialog).value,
           sex: $("#mvSex", dialog)?.value || undefined,
           weight_kg: $("#mvKg", dialog).value || null,
@@ -324,7 +337,7 @@ export function openMoveDialog(ctx, m, dest) {
         undoable(ctx, `${head} hd drafted off to ${toName}${r.animals ? ` (${r.animals} animal records moved)` : ""}`, r.batch);
       } else {
         const ids = [m.id, ...[...dialog.querySelectorAll("#mvOthers input:checked")].map((c) => Number(c.value))];
-        const r = await send("POST", "/api/actions/move", { mob_ids: ids, to: [to], ...when, note: $("#mvNote", dialog).value },
+        const r = await send("POST", "/api/actions/move", { mob_ids: ids, to: lost ? to : [to], ...when, note: $("#mvNote", dialog).value },
           { queue: `Move ${ids.length > 1 ? `${ids.length} mobs` : m.name} to ${toName}` });
         dialog.close();
         await ctx.refresh();
@@ -611,6 +624,14 @@ function mergeDialog(ctx, m) {
 
 /* --------------------------------- mob page -------------------------------- */
 
+/** "Not found since 12 May (195 days) · last seen in 3 mile · note". */
+export function unaccountedText(m) {
+  const u = m.unaccounted;
+  if (!u) return "";
+  const days = Math.floor((Date.now() - Date.parse(`${u.since}T00:00:00`)) / 86_400_000);
+  return `Not found since <b>${day(u.since)}</b> (${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`})${u.last_seen_names?.length ? ` · last seen in ${escapeHtml(u.last_seen_names.join(" + "))}` : ""}${u.note ? ` · ${escapeHtml(u.note)}` : ""}`;
+}
+
 export function mobPageHtml(ctx, m) {
   const where = m.paddocks.map((p) => `<button class="linkbtn" data-paddock="${p.id}">${escapeHtml(p.name)}</button>`).join(" + ");
   const facts = [
@@ -632,11 +653,12 @@ export function mobPageHtml(ctx, m) {
     <p class="sub">${escapeHtml(m.species)}${m.owner ? ` · <span class="chip owner">${escapeHtml(m.owner)}</span> agistment` : ""}</p>
 
     <div class="statuscard">
-      <div class="big"><b>${m.head} hd</b> · ${where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
-      <div class="muted small">${m.in_paddock_since ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
+      <div class="big"><b>${m.head} hd</b> · ${m.unaccounted ? '<b class="warnc">Unaccounted for</b>' : where || "not in a paddock"}${m.waiting ? ' <span class="chip pending" title="Changed on this phone out of signal; goes to the server when it\'s back">not sent yet</span>' : ""}</div>
+      ${m.unaccounted ? `<div class="small">${unaccountedText(m)}</div>` : ""}
+      <div class="muted small">${m.in_paddock_since && !m.unaccounted ? `since ${day(m.in_paddock_since)} · ` : ""}${kg(m.est_weight_kg)} · ${m.ae_total != null ? `${nf0.format(m.ae_total)} AE` : "AE unknown"}</div>
       ${m.leaving ? `<div class="leavingline">${m.leaving.head && m.leaving.head < m.head ? `<b>${m.leaving.head} of ${m.head} hd</b> booked` : "Booked"} to leave <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` · ${escapeHtml(m.leaving.note)}` : ""}${leavingYards(ctx, m.leaving)}${daysUntil(m.leaving.date)}</div>` : ""}
       ${ctx.canEdit ? `<div class="btns">
-        <button class="btn primary" id="mMove">Move…</button>
+        <button class="btn primary" id="mMove">${m.unaccounted ? "Found them…" : "Move…"}</button>
         <button class="btn" id="mDraft">Draft some off…</button>
         <button class="btn" id="mWeigh">Record weight…</button>
         <button class="btn" id="mDeaths">Deaths…</button>
@@ -644,7 +666,9 @@ export function mobPageHtml(ctx, m) {
         <button class="btn" id="mMerge">Merge into another mob…</button>
         <button class="btn" id="mLeaving">${m.leaving ? "Change leaving date…" : "Booked to leave…"}</button>
       </div>
-      <p class="muted tiny">Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map.</p>` : ""}
+      <p class="muted tiny">${m.unaccounted
+        ? "When they turn up, use Found them… to put them in the paddock they were found in. If only some turn up, use Draft some off… for those."
+        : "Or drag the mob's icon on the map. To give it more paddocks, open a gate: click the gate on the map."}</p>` : ""}
     </div>
 
     <h3>Animals</h3>

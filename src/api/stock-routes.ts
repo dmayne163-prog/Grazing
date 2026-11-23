@@ -93,6 +93,10 @@ stockApi.get("/mobs", (req, res) => {
     owner: v.mob.owner,
     ...v.state,
     paddocks: v.state.paddock_ids.map((id) => ({ id, name: byId.get(id)?.row.name ?? `#${id}` })),
+    unaccounted: v.state.unaccounted && {
+      ...v.state.unaccounted,
+      last_seen_names: v.state.unaccounted.last_seen.map((id) => byId.get(id)?.row.name ?? `#${id}`),
+    },
     ae_head: v.ae_head,
     ae_total: v.ae_total,
     agriwebb_ae_head: v.agriwebb_ae_head,

@@ -20,7 +20,7 @@ import { loadPlantings, plantingsSectionHtml } from "./plantings.js";
 import { flush as sendWaiting, list as outboxList, onChange as onOutboxChange, remove as dropWaiting, startSending, syncState } from "./outbox.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
-import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog } from "./stockui.js";
+import { bindMobPage, gatePanelHtml, loadGatePanel, mobPageHtml, openMoveDialog, unaccountedText } from "./stockui.js";
 import { escapeHtml, FarmMap, featureAt, kindColour, localGet, localSet, PASTURE_BINS, pastureColour } from "./map.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -142,7 +142,7 @@ async function showWaiting() {
       for (const id of b.mob_ids || []) {
         const mob = state.mobs.find((x) => x.id === Number(id));
         if (!mob) continue;
-        mob.paddock_ids = (b.to || []).map(Number);
+        mob.paddock_ids = Array.isArray(b.to) ? b.to.map(Number) : [];
         mob.paddocks = mob.paddock_ids.map((pid) => ({ id: pid, name: state.byId.get(pid)?.properties.name ?? `#${pid}` }));
         mob.in_paddock_since = b.date || mob.in_paddock_since;
         mob.waiting = true;
@@ -201,9 +201,21 @@ function restLabel(id) {
   return `${r} d`;
 }
 
+/**
+ * "Management only" areas (like AgriWebb's "lost boys and girls") aren't real
+ * paddocks: they're kept for the names in old history but left off the map,
+ * the paddock list and the move menus unless Layers → Show management-only
+ * areas is ticked.
+ */
+const isMgmtOnly = (f) => f.properties.kind === "paddock" && f.properties.subtype === "management only";
+let allFeatures = [];
 function setFeatures(features) {
+  allFeatures = features;
+  const showMgmt = localGet("showMgmt") === "1";
+  features = showMgmt ? features : features.filter((f) => !isMgmtOnly(f));
   state.features = features;
-  state.byId = new Map(features.map((f) => [f.id, f]));
+  // Every feature for names (history mentions hidden ones too).
+  state.byId = new Map(allFeatures.map((f) => [f.id, f]));
   if (state.selectedId !== null && !state.byId.has(state.selectedId)) state.selectedId = null;
   farm.setFeatures(features);
   drawStock();
@@ -628,6 +640,12 @@ function layersHtml() {
           <span class="count">${counts.get(k.id) || 0}</span>
         </label>`).join("")}
     </div>
+      ${allFeatures.some(isMgmtOnly) ? `<label title="Areas like AgriWebb's lost boys and girls: not real paddocks">
+        <input type="checkbox" data-mgmt ${localGet("showMgmt") === "1" ? "checked" : ""}>
+        <span class="swatch" data-colour="#e24e4c"></span>
+        Show management-only areas
+        <span class="count">${allFeatures.filter(isMgmtOnly).length}</span>
+      </label>` : ""}
       <label>
         <input type="checkbox" data-mobs ${localGet("hideMobs") === "1" ? "" : "checked"}>
         <span class="swatch" data-colour="#4FA9D6"></span>
@@ -750,6 +768,12 @@ function bindOverview() {
   body.querySelectorAll("[data-layer]").forEach((cb) => {
     cb.onchange = () => farm.setKindVisible(cb.dataset.layer, cb.checked);
   });
+  const mgmtToggle = $("[data-mgmt]", body);
+  if (mgmtToggle) mgmtToggle.onchange = () => {
+    localSet("showMgmt", mgmtToggle.checked ? "1" : "0");
+    setFeatures(allFeatures);
+    render();
+  };
   const mobsToggle = $("[data-mobs]", body);
   if (mobsToggle) mobsToggle.onchange = () => {
     localSet("hideMobs", mobsToggle.checked ? "0" : "1");
@@ -1538,16 +1562,27 @@ function mobsTable() {
       <td class="num">${kg(m.est_weight_kg)}</td>
       <td class="num">${m.ae_total != null ? nf0.format(m.ae_total) : "—"}</td>
     </tr>`).join("");
+  // Missed at a muster: listed on their own, still counted in the totals.
+  const lost = mobs.filter((m) => m.unaccounted).sort((a, b) => a.unaccounted.since.localeCompare(b.unaccounted.since));
+  const placed = mobs.filter((m) => !m.unaccounted);
   const own = mobs.filter((m) => !m.owner);
   const agisted = mobs.filter((m) => m.owner);
   const head = `<thead><tr><th>Mob</th><th class="num">Head</th><th class="num">Weight</th><th class="num">AE</th></tr></thead>`;
   return `
     ${importBtn}
+    ${lost.length ? `
+      <h3 class="warnc">Unaccounted for · ${nf0.format(lost.reduce((t, m) => t + m.head, 0))} head</h3>
+      <table class="list"><tbody>${lost.map((m) => `
+        <tr class="row" data-mob="${m.id}">
+          <td>${escapeHtml(m.name)}${m.owner ? ` <span class="chip owner">${escapeHtml(m.owner)}</span>` : ""}<div class="muted tiny">${unaccountedText(m)}</div></td>
+          <td class="num">${m.head}</td>
+        </tr>`).join("")}</tbody></table>
+      <p class="muted tiny">Not found at a muster: still on the books and in the totals below, but not on the map. Open one and use <b>Found them…</b> when they turn up.</p>` : ""}
     <h3>Own stock · ${nf0.format(ownHead(own))} head · ${nf0.format(total(own))} AE</h3>
-    <table class="list">${head}<tbody>${rows(own)}</tbody></table>
+    <table class="list">${head}<tbody>${rows(placed.filter((m) => !m.owner))}</tbody></table>
     ${agisted.length ? `
       <h3>Agistment · ${nf0.format(agistHead(agisted))} head · ${nf0.format(total(agisted))} AE</h3>
-      <table class="list">${head}<tbody>${rows(agisted)}</tbody></table>` : ""}
+      <table class="list">${head}<tbody>${rows(placed.filter((m) => m.owner))}</tbody></table>` : ""}
     <p class="muted small gap-top">AE is worked from each mob's weight (a 450 kg steer = 1 AE).</p>`;
 }
 
