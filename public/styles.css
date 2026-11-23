@@ -719,3 +719,10 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .ratings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .btn.rating { display: flex; flex-direction: column; align-items: center; line-height: 1.25; padding: 8px 6px; }
 .btn.rating .tiny { opacity: 0.8; font-weight: normal; }
+
+/* Paddock camera pictures: the picture full width, a strip of days under it. */
+.camshot { margin: 6px 0; }
+.camshot img { display: block; width: 100%; height: auto; border-radius: 6px; background: var(--panel-2, #222); cursor: zoom-in; }
+.camshot .camnav { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.camshot .camnav .when { flex: 1; text-align: center; }
+.camshot input[type="range"] { width: 100%; }

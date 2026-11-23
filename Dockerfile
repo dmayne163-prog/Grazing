@@ -22,6 +22,11 @@ FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
+# ffmpeg takes one picture a day from the paddock cameras' live video (the
+# NVR's own snapshot needs an admin login; the live stream doesn't).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Runtime needs libstdc++ for the compiled sqlite binding, which the slim
 # image already carries; no build toolchain is shipped.
 COPY --from=builder /tmp/prod_node_modules ./node_modules

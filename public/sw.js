@@ -18,7 +18,7 @@
  */
 
 // Bumped when the caching rules change, so phones drop copies kept under the old ones.
-const STATIC = "static-v28";
+const STATIC = "static-v29";
 const DATA = "data-v2";
 const PHOTOS = "photos-v1";
 const TILES = "tiles-qld";
@@ -33,7 +33,7 @@ const SHELL = [
   "/vendor/leaflet/leaflet.css", "/vendor/leaflet/leaflet.js", "/vendor/geoman/leaflet-geoman.css", "/vendor/geoman/leaflet-geoman.min.js",
   ...["animalui", "api", "capacity", "editor", "gatefinder", "importer", "main", "map", "moblayer", "movements", "nlischeck", "notes",
     "offline", "optiweighui", "outbox", "pasture", "plan", "rain", "register", "reports", "ruminati",
-    "planlayer", "plantings", "feedcheck", "stockui", "theme", "tidy", "users"].map((n) => `/js/${n}.js`),
+    "planlayer", "plantings", "feedcheck", "cameras", "stockui", "theme", "tidy", "users"].map((n) => `/js/${n}.js`),
 ];
 
 self.addEventListener("install", (event) => {

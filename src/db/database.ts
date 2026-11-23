@@ -517,6 +517,27 @@ CREATE TABLE IF NOT EXISTS feed_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_feed_checks_feature ON feed_checks(feature_id, checked_on);
 
+-- Paddock cameras: an NVR channel and the paddock it looks over.
+CREATE TABLE IF NOT EXISTS cameras (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel     INTEGER NOT NULL,
+  name        TEXT    NOT NULL,
+  feature_id  INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL,
+  deleted_at  INTEGER
+);
+-- One picture a day from each camera: the file is DATA_DIR/cameras/<file>.
+CREATE TABLE IF NOT EXISTS camera_shots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  camera_id   INTEGER NOT NULL,
+  feature_id  INTEGER NOT NULL,
+  taken_on    TEXT    NOT NULL,
+  taken_at    INTEGER NOT NULL,
+  file        TEXT    NOT NULL,
+  bytes       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_camera_shots ON camera_shots(feature_id, taken_on);
+
 -- Sentinel-2: one row per paddock per satellite pass, the average of each colour
 -- band over the pixels seen clearly. The satellite estimate is worked out from
 -- these, so the model can be refitted without fetching the imagery again.

@@ -59,6 +59,20 @@ export const config = {
    */
   tileMaxAgeDays: num("TILE_MAX_AGE_DAYS", 180),
 
+  /* ------------------------------- cameras ------------------------------- */
+
+  /**
+   * The security cameras' NVR (Dahua): its LAN address and a view-only login.
+   * Once a day each paddock camera's live video gives one picture, kept in
+   * DATA_DIR/cameras. Blank NVR_HOST: no camera pictures.
+   */
+  nvrHost: str("NVR_HOST", ""),
+  nvrUser: str("NVR_USER", ""),
+  nvrPass: str("NVR_PASS", ""),
+  nvrRtspPort: num("NVR_RTSP_PORT", 554),
+  /** Local hour of the daily pictures: mid-morning light, the same each day. */
+  cameraHour: num("CAMERA_HOUR", 10),
+
   /** Nightly database copies into DATA_DIR/backups: the hour they run, and how many are kept. */
   backupHour: num("BACKUP_HOUR", 2),
   backupKeep: num("BACKUP_KEEP", 30),

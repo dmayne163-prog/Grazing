@@ -19,6 +19,7 @@ import { PlanLayer, colourOf, planMobs } from "./planlayer.js";
 import { loadNotes, notesSectionHtml } from "./notes.js";
 import { loadPlantings, plantingsSectionHtml } from "./plantings.js";
 import { feedCheckSectionHtml, loadFeedChecks } from "./feedcheck.js";
+import { camerasSectionHtml, loadCameras } from "./cameras.js";
 import { flush as sendWaiting, list as outboxList, onChange as onOutboxChange, remove as dropWaiting, startSending, syncState } from "./outbox.js";
 import { MobLayer } from "./moblayer.js";
 import { loadMobAnimals, renderAnimal, renderAnimalResults, renderAnimalsTab } from "./animalui.js";
@@ -1232,6 +1233,7 @@ function featureHtml(f) {
     ${p.kind === "paddock" ? `<h3>Grazing history</h3><div id="grazing"><p class="muted small">Loading…</p></div>` : ""}
     ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>` : ""}
     ${p.kind === "paddock" ? stockHtml(f) : ""}
+    ${p.kind === "paddock" ? camerasSectionHtml() : ""}
     ${p.kind === "paddock" ? feedCheckSectionHtml() : ""}
     ${p.kind === "paddock" ? plantingsSectionHtml() : ""}
     ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
@@ -1261,7 +1263,7 @@ function bindFeature(f) {
     tr.onclick = () => selectMob(Number(tr.dataset.mob));
   });
   $("#back").onclick = () => select(null);
-  if (f.properties.kind === "paddock") { loadGrazing(f); loadWhoHere(f); loadPlantings(ctx, f, body); loadFeedChecks(ctx, f, body); }
+  if (f.properties.kind === "paddock") { loadGrazing(f); loadWhoHere(f); loadPlantings(ctx, f, body); loadFeedChecks(ctx, f, body); loadCameras(ctx, f, body); }
   const pp = $("#paddockPasture");
   if (pp) renderPaddockPasture(pp, f.id, grazable(f) || f.properties.area_ha || 0, () => state.selectedId === f.id);
   if (isGate(f)) loadGatePanel(ctx, f, body);

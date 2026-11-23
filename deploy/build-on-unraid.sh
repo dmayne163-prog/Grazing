@@ -50,6 +50,11 @@ OPTIWEIGH_API_KEY="${OPTIWEIGH_API_KEY:-}"
 # The automatic rain gauge's Cerbo GX: a LAN address, so local.env only.
 RAIN_CERBO_HOST="${RAIN_CERBO_HOST:-}"
 RAIN_PULSE_INSTANCE="${RAIN_PULSE_INSTANCE:-}"
+# The camera NVR: a LAN address and a view-only login (Live permission), for a
+# daily picture of the paddocks it covers. local.env only, never git.
+NVR_HOST="${NVR_HOST:-}"
+NVR_USER="${NVR_USER:-}"
+NVR_PASS="${NVR_PASS:-}"
 
 echo "==> building $IMAGE"
 docker build -t "$IMAGE" .
@@ -79,6 +84,9 @@ docker run -d \
   -e OPTIWEIGH_API_KEY="$OPTIWEIGH_API_KEY" \
   -e RAIN_CERBO_HOST="$RAIN_CERBO_HOST" \
   -e RAIN_PULSE_INSTANCE="$RAIN_PULSE_INSTANCE" \
+  -e NVR_HOST="$NVR_HOST" \
+  -e NVR_USER="$NVR_USER" \
+  -e NVR_PASS="$NVR_PASS" \
   "$IMAGE"
 
 echo
