@@ -250,7 +250,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   };
   const plantingOf = (id: number) => {
     const p = plantings.get(id);
-    return p ? { crop: p.crop, sown_on: p.sown_on, rate_kg_ha: p.rate_kg_ha, fertiliser: p.fertiliser, ready_on: readyOn(id)!, ready_guessed: !p.ready_on } : null;
+    return p ? { crop: p.crop, crops: p.crops, sown_on: p.sown_on, rate_kg_ha: p.rate_kg_ha, fertiliser: p.fertiliser, ready_on: readyOn(id)!, ready_guessed: !p.ready_on } : null;
   };
   const notReady = [...plantings.keys()]
     .filter((id) => readyOn(id)! > now && !skip.has(id))

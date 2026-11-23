@@ -35,8 +35,10 @@ export async function loadPlantings(ctx, f, root) {
   const reload = () => { forgetRotation(); loadPlantings(ctx, f, root); };
   const today = todayIso();
   const [cur, ...older] = list;
+  const mix = (p) => p.crops.length > 1 || p.crops[0]?.rate_kg_ha != null;
+  const cropsText = (p) => p.crops.map((c) => `${escapeHtml(c.crop)}${c.rate_kg_ha != null ? ` ${c.rate_kg_ha} kg/ha` : ""}`).join(" + ");
   const line = (p) => [
-    p.rate_kg_ha != null ? `${p.rate_kg_ha} kg/ha seed` : null,
+    mix(p) ? `Seed: ${cropsText(p)}${p.crops.length > 1 && p.rate_kg_ha != null ? ` (${p.rate_kg_ha} kg/ha in all)` : ""}` : null,
     p.fertiliser ? escapeHtml(p.fertiliser) : null,
   ].filter(Boolean).join(" · ");
   el.innerHTML = `
@@ -80,15 +82,12 @@ function plantingDialog(ctx, featureId, name, p, after) {
     <div class="dlg narrow">
       <header><h2>${p ? "Change the planting in" : "Planting in"} ${escapeHtml(name)}</h2></header>
       <div class="body">
-        <div class="row2">
-          <div class="f"><label for="plSown">Date planted</label><input id="plSown" type="date" value="${escapeHtml(p?.sown_on || today)}"></div>
-          <div class="f"><label for="plCrop">Crop</label><input id="plCrop" value="${escapeHtml(p?.crop || "")}" placeholder="e.g. Oats (Bimbil)" list="plCrops"></div>
-        </div>
-        <datalist id="plCrops"><option value="Oats"><option value="Barley"><option value="Forage sorghum"><option value="Millet"><option value="Lablab"><option value="Ryegrass"><option value="Wheat"></datalist>
-        <div class="row2">
-          <div class="f"><label for="plRate">Seeding rate (kg/ha)</label><input id="plRate" type="number" min="0" step="0.5" inputmode="decimal" value="${p?.rate_kg_ha ?? ""}"></div>
-          <div class="f"><label for="plFert">Fertiliser and rate</label><input id="plFert" value="${escapeHtml(p?.fertiliser || "")}" placeholder="e.g. Urea 50 kg/ha"></div>
-        </div>
+        <div class="f"><label for="plSown">Date planted</label><input id="plSown" type="date" value="${escapeHtml(p?.sown_on || today)}"></div>
+        <div class="croprows" id="plCrops"></div>
+        <datalist id="plCropList"><option value="Oats"><option value="Barley"><option value="Forage sorghum"><option value="Millet"><option value="Lablab"><option value="Ryegrass"><option value="Wheat"><option value="Vetch"><option value="Medic"><option value="Clover"><option value="Rhodes grass"></datalist>
+        <div class="btns"><button class="btn" id="plAddCrop" type="button">+ Add another crop</button></div>
+        <p class="muted tiny" id="plTotal"></p>
+        <div class="f"><label for="plFert">Fertiliser and rate</label><input id="plFert" value="${escapeHtml(p?.fertiliser || "")}" placeholder="e.g. Urea 50 kg/ha"></div>
         <div class="f"><label for="plReady">Ready to graze from</label><input id="plReady" type="date" value="${escapeHtml(p?.ready_on || "")}">
           <p class="muted tiny" id="plReadyHint"></p></div>
         <div class="f"><label for="plNote">Note</label><textarea id="plNote" rows="2" placeholder="e.g. Sown into moisture after 40 mm">${escapeHtml(p?.note || "")}</textarea></div>
@@ -107,6 +106,34 @@ function plantingDialog(ctx, featureId, name, p, after) {
       : sown ? `Leave it blank to take about 8 weeks after planting (${day(addDays(sown, READY_DAYS))}).` : "";
   };
   $("#plSown").oninput = hint; $("#plReady").oninput = hint; hint();
+
+  // One row per crop in the mix, each with its own seeding rate.
+  const rowsEl = $("#plCrops");
+  const total = () => {
+    const rows = cropRows().filter((c) => c.crop);
+    const sum = rows.reduce((t, c) => t + (Number(c.rate_kg_ha) || 0), 0);
+    $("#plTotal").textContent = rows.length > 1 && sum ? `${Math.round(sum * 100) / 100} kg/ha of seed in all.` : "";
+  };
+  const addRow = (c = { crop: "", rate_kg_ha: null }) => {
+    const n = rowsEl.children.length + 1;
+    const row = document.createElement("div");
+    row.className = "croprow";
+    row.innerHTML = `
+      <div class="f"><label for="plCrop${n}">Crop</label><input id="plCrop${n}" data-crop value="${escapeHtml(c.crop || "")}" placeholder="e.g. Oats (Bimbil)" list="plCropList"></div>
+      <div class="f"><label for="plRate${n}">Seed (kg/ha)</label><input id="plRate${n}" data-rate type="number" min="0" step="0.5" inputmode="decimal" value="${c.rate_kg_ha ?? ""}"></div>
+      <button class="btn" type="button" data-remove title="Take this crop out">✕</button>`;
+    row.querySelector("[data-remove]").onclick = () => { row.remove(); if (!rowsEl.children.length) addRow(); showRemove(); total(); };
+    row.querySelectorAll("input").forEach((i) => { i.oninput = total; });
+    rowsEl.append(row);
+    showRemove();
+    return row;
+  };
+  // The ✕ only shows when there's more than one crop.
+  const showRemove = () => rowsEl.querySelectorAll("[data-remove]").forEach((b) => { b.hidden = rowsEl.children.length < 2; });
+  const cropRows = () => [...rowsEl.children].map((r) => ({ crop: r.querySelector("[data-crop]").value.trim(), rate_kg_ha: r.querySelector("[data-rate]").value.trim() }));
+  (p?.crops?.length ? p.crops : [undefined]).forEach((c) => addRow(c));
+  total();
+  $("#plAddCrop").onclick = () => addRow().querySelector("[data-crop]").focus();
   $("#plCancel").onclick = () => d.close();
   $("#plDel")?.addEventListener("click", async () => {
     if (!confirm(`Delete this ${p.crop} planting?`)) return;
@@ -114,12 +141,14 @@ function plantingDialog(ctx, featureId, name, p, after) {
     catch (e) { ctx.toast(e.message, { error: true }); }
   });
   $("#plGo").onclick = async () => {
+    const crops = cropRows();
+    if (crops.some((c) => !c.crop && c.rate_kg_ha)) { ctx.toast("A seeding rate needs the crop it's for", { error: true }); return; }
     const body = {
-      sown_on: $("#plSown").value, crop: $("#plCrop").value.trim(), rate_kg_ha: $("#plRate").value.trim(),
+      sown_on: $("#plSown").value, crops: crops.filter((c) => c.crop),
       fertiliser: $("#plFert").value, ready_on: $("#plReady").value, note: $("#plNote").value,
     };
     if (!body.sown_on) { ctx.toast("Give the date it was planted", { error: true }); return; }
-    if (!body.crop) { ctx.toast("Say what was planted", { error: true }); return; }
+    if (!body.crops.length) { ctx.toast("Say what was planted", { error: true }); return; }
     const btn = $("#plGo");
     btn.disabled = true;
     try {

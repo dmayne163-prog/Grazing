@@ -488,8 +488,9 @@ CREATE TABLE IF NOT EXISTS plantings (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   feature_id  INTEGER NOT NULL,
   sown_on     TEXT    NOT NULL,
-  crop        TEXT    NOT NULL,
-  rate_kg_ha  REAL,
+  crop        TEXT    NOT NULL,         -- the crops' names joined, "Oats + Vetch"
+  crops       TEXT,                     -- JSON [{crop, rate_kg_ha}]: each crop in the mix and its seeding rate
+  rate_kg_ha  REAL,                     -- the total seeding rate
   fertiliser  TEXT,
   ready_on    TEXT,
   note        TEXT,
@@ -546,6 +547,9 @@ CREATE TABLE IF NOT EXISTS settings (
   // recorded at the time: likely, but inferred, and shown as such.
   const gateCols = (db.pragma("table_info(gate_events)") as Array<{ name: string }>).map((c) => c.name);
   if (!gateCols.includes("inferred")) db.exec("ALTER TABLE gate_events ADD COLUMN inferred INTEGER NOT NULL DEFAULT 0");
+  // A planting can be a mix of crops, each with its own seeding rate.
+  const plantingCols = (db.pragma("table_info(plantings)") as Array<{ name: string }>).map((c) => c.name);
+  if (!plantingCols.includes("crops")) db.exec("ALTER TABLE plantings ADD COLUMN crops TEXT");
 }
 
 /* --------------------------------- events -------------------------------- */

@@ -686,3 +686,5 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .leavingline{margin-top:4px;font-size:13px;color:var(--warn)}
 .planting{border-left:3px solid var(--warn);padding:2px 0 2px 10px;margin:4px 0 8px}
 .planting .btns{margin-top:6px}
+.croprow{display:grid;grid-template-columns:1fr 110px auto;gap:8px;align-items:end}
+.croprow .btn{margin-bottom:12px}
