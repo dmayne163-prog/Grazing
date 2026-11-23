@@ -72,6 +72,8 @@ export const config = {
   nvrRtspPort: num("NVR_RTSP_PORT", 554),
   /** Local hour of the daily pictures: mid-morning light, the same each day. */
   cameraHour: num("CAMERA_HOUR", 10),
+  /** Seconds a turning camera is given to reach a preset and focus before its picture. */
+  cameraPtzSettle: num("CAMERA_PTZ_SETTLE", 15),
 
   /** Nightly database copies into DATA_DIR/backups: the hour they run, and how many are kept. */
   backupHour: num("BACKUP_HOUR", 2),

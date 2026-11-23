@@ -29,7 +29,7 @@ export async function loadCameras(ctx, f, root) {
     ${data.cameras.map((c) => {
       const shots = data.shots.filter((s) => s.camera_id === c.id);
       return `<div class="camshot" data-cam="${c.id}">
-        <div class="small"><b>${escapeHtml(c.name)}</b> <span class="muted">· channel ${c.channel}</span>
+        <div class="small"><b>${escapeHtml(c.name)}</b> <span class="muted">· channel ${c.channel}${c.preset != null ? `, turned to preset ${c.preset}` : ""}</span>
           ${ctx.canEdit ? ` <button class="linkbtn" data-cam-edit="${c.id}">Change</button>` : ""}</div>
         ${shots.length ? `
           <a href="/api/camera-shots/${shots[0].id}.jpg" target="_blank" rel="noopener" data-full><img alt="${escapeHtml(c.name)}, ${escapeHtml(shots[0].taken_on)}" src="/api/camera-shots/${shots[0].id}.jpg" loading="lazy"></a>
@@ -73,7 +73,7 @@ export async function loadCameras(ctx, f, root) {
   el.querySelectorAll("[data-cam-shot]").forEach((b) => {
     b.onclick = async () => {
       b.disabled = true;
-      b.textContent = "Taking it… (up to half a minute)";
+      b.textContent = "Taking it… (up to a minute)";
       try { await send("POST", `/api/cameras/${b.dataset.camShot}/shot`); ctx.toast("Picture taken"); reload(); }
       catch (e) { ctx.toast(e.message, { error: true }); b.disabled = false; b.textContent = "Take a picture now"; }
     };
@@ -92,6 +92,8 @@ function cameraDialog(ctx, featureId, padName, cam, after) {
       <div class="body">
         <div class="f"><label for="cmCh">Channel on the NVR</label><input id="cmCh" type="number" min="1" max="256" inputmode="numeric" value="${cam?.channel ?? ""}" placeholder="e.g. 4">
           <p class="muted tiny">The camera's number on the NVR's LIVE screen.</p></div>
+        <div class="f"><label for="cmPreset">Preset (turning cameras only)</label><input id="cmPreset" type="number" min="1" max="255" inputmode="numeric" value="${cam?.preset ?? ""}" placeholder="blank for a fixed camera">
+          <p class="muted tiny">For a camera that turns (PTZ): the number of the saved position that looks over this paddock. It's turned there for the picture, then back to its lowest-numbered preset, so make preset 1 the view it normally watches.</p></div>
         <div class="f"><label for="cmName">Name</label><input id="cmName" value="${escapeHtml(cam?.name || "")}" placeholder="e.g. ${escapeHtml(padName)} trough"></div>
       </div>
       <footer class="btns">
@@ -107,7 +109,7 @@ function cameraDialog(ctx, featureId, padName, cam, after) {
     catch (e) { ctx.toast(e.message, { error: true }); }
   });
   $("#cmGo").onclick = async () => {
-    const body = { channel: $("#cmCh").value, name: $("#cmName").value };
+    const body = { channel: $("#cmCh").value, preset: $("#cmPreset").value, name: $("#cmName").value };
     try {
       if (cam) await send("PATCH", `/api/cameras/${cam.id}`, body);
       else await send("POST", "/api/cameras", { feature_id: featureId, ...body });

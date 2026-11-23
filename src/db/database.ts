@@ -609,6 +609,9 @@ CREATE TABLE IF NOT EXISTS settings (
   // A planting can be a mix of crops, each with its own seeding rate.
   const plantingCols = (db.pragma("table_info(plantings)") as Array<{ name: string }>).map((c) => c.name);
   if (!plantingCols.includes("crops")) db.exec("ALTER TABLE plantings ADD COLUMN crops TEXT");
+  // A turning (PTZ) camera: the saved position on the NVR it's turned to for this paddock.
+  const cameraCols = (db.pragma("table_info(cameras)") as Array<{ name: string }>).map((c) => c.name);
+  if (!cameraCols.includes("preset")) db.exec("ALTER TABLE cameras ADD COLUMN preset INTEGER");
 }
 
 /* --------------------------------- events -------------------------------- */

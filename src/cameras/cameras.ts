@@ -12,11 +12,13 @@ import { config } from "../config.js";
 import { db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { today } from "../stock/store.js";
+import { gotoPreset } from "./nvr-http.js";
 
 const log = logger("cameras");
 export const CAMERA_DIR = join(config.dataDir, "cameras");
 
-export interface Camera { id: number; channel: number; name: string; feature_id: number; created_at: number }
+/** preset: for a turning (PTZ) camera, the saved position it's turned to for this paddock. */
+export interface Camera { id: number; channel: number; preset: number | null; name: string; feature_id: number; created_at: number }
 export interface Shot { id: number; camera_id: number; feature_id: number; taken_on: string; taken_at: number; file: string; bytes: number }
 
 export class CameraError extends Error {}
@@ -25,12 +27,12 @@ export const camerasOn = () => !!(config.nvrHost && config.nvrUser);
 
 export function listCameras(featureId?: number): Camera[] {
   return (featureId === undefined
-    ? db.prepare("SELECT id, channel, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL ORDER BY channel").all()
-    : db.prepare("SELECT id, channel, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel").all(featureId)) as Camera[];
+    ? db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL ORDER BY channel, preset, id").all()
+    : db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel, preset, id").all(featureId)) as Camera[];
 }
 
 export function getCamera(id: number): Camera | null {
-  return (db.prepare("SELECT id, channel, name, feature_id, created_at FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as Camera | undefined) ?? null;
+  return (db.prepare("SELECT id, channel, preset, name, feature_id, created_at FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as Camera | undefined) ?? null;
 }
 
 function clean(b: Record<string, unknown>, old?: Camera) {
@@ -38,14 +40,17 @@ function clean(b: Record<string, unknown>, old?: Camera) {
   if (!Number.isInteger(channel) || channel < 1 || channel > 256) throw new CameraError("Channel: the camera's number on the NVR, e.g. 4");
   const name = b["name"] === undefined && old ? old.name : (typeof b["name"] === "string" ? b["name"].trim().slice(0, 80) : "");
   if (!name) throw new CameraError("Give the camera a name, e.g. Almum trough");
-  return { channel, name };
+  const pv = b["preset"] === undefined && old ? old.preset : b["preset"];
+  const preset = pv === null || pv === undefined || pv === "" ? null : Number(pv);
+  if (preset !== null && (!Number.isInteger(preset) || preset < 1 || preset > 255)) throw new CameraError("Preset: the saved position's number on the NVR, e.g. 1, or blank for a fixed camera");
+  return { channel, name, preset };
 }
 
 export function addCamera(featureId: number, b: Record<string, unknown>): Camera {
   const f = db.prepare("SELECT kind FROM features WHERE id = ? AND deleted_at IS NULL").get(featureId) as { kind: string } | undefined;
   if (f?.kind !== "paddock") throw new CameraError("A camera goes on a paddock");
   const c = clean(b);
-  const r = db.prepare("INSERT INTO cameras (channel, name, feature_id, created_at) VALUES (?, ?, ?, ?)").run(c.channel, c.name, featureId, Date.now());
+  const r = db.prepare("INSERT INTO cameras (channel, preset, name, feature_id, created_at) VALUES (?, ?, ?, ?, ?)").run(c.channel, c.preset, c.name, featureId, Date.now());
   return getCamera(Number(r.lastInsertRowid))!;
 }
 
@@ -53,7 +58,7 @@ export function updateCamera(id: number, b: Record<string, unknown>): Camera {
   const old = getCamera(id);
   if (!old) throw new CameraError("That camera doesn't exist any more");
   const c = clean(b, old);
-  db.prepare("UPDATE cameras SET channel = ?, name = ? WHERE id = ?").run(c.channel, c.name, id);
+  db.prepare("UPDATE cameras SET channel = ?, preset = ?, name = ? WHERE id = ?").run(c.channel, c.preset, c.name, id);
   return getCamera(id)!;
 }
 
@@ -100,8 +105,46 @@ function grabFrame(channel: number, out: string): Promise<void> {
   });
 }
 
-/** Takes today's picture from one camera, replacing any taken earlier today. */
-export async function takeShot(cam: Camera): Promise<Shot> {
+/*
+ * A turning camera is turned to the paddock's preset and given time to settle
+ * before its picture, then turned back to its usual view: the lowest preset
+ * used on that channel (set that one to where it normally looks). Only one
+ * picture is taken at a time, so two turns never overlap.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(job: () => Promise<T>): Promise<T> {
+  const run = queue.then(job, job);
+  queue = run.catch(() => undefined);
+  return run;
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The preset a turning camera's channel goes back to: the lowest used for it. */
+function homePreset(channel: number): number | null {
+  const r = db.prepare("SELECT MIN(preset) AS p FROM cameras WHERE channel = ? AND preset IS NOT NULL AND deleted_at IS NULL").get(channel) as { p: number | null };
+  return r.p;
+}
+
+/** Today's picture from one camera (turned to its preset first, and back after), replacing any taken earlier today. */
+export function takeShot(cam: Camera): Promise<Shot> {
+  return oneAtATime(async () => {
+    if (cam.preset === null) return grabShot(cam);
+    await turnTo(cam.channel, cam.preset);
+    try { return await grabShot(cam); }
+    finally { await turnHome(cam.channel); }
+  });
+}
+
+async function turnTo(channel: number, preset: number) {
+  await gotoPreset(channel, preset);
+  await sleep(config.cameraPtzSettle * 1000);
+}
+async function turnHome(channel: number) {
+  const home = homePreset(channel);
+  if (home === null) return;
+  try { await gotoPreset(channel, home); } catch (e) { log.warn(`couldn't turn channel ${channel} back to preset ${home}: ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+async function grabShot(cam: Camera): Promise<Shot> {
   if (!camerasOn()) throw new CameraError("No camera NVR is set up on the server (NVR_HOST, NVR_USER, NVR_PASS)");
   const day = today();
   const dir = join(CAMERA_DIR, String(cam.id));
@@ -127,11 +170,20 @@ export async function takeShot(cam: Camera): Promise<Shot> {
 export async function takeDailyShots(): Promise<{ taken: number; failed: number }> {
   const day = today();
   let taken = 0, failed = 0;
-  for (const cam of listCameras()) {
-    const has = db.prepare("SELECT 1 FROM camera_shots WHERE camera_id = ? AND taken_on = ?").get(cam.id, day);
-    if (has) continue;
-    try { await takeShot(cam); taken++; }
-    catch (e) { failed++; log.warn(`camera ${cam.name} (channel ${cam.channel}): ${e instanceof Error ? e.message : String(e)}`); }
+  const due = listCameras().filter((cam) => !db.prepare("SELECT 1 FROM camera_shots WHERE camera_id = ? AND taken_on = ?").get(cam.id, day));
+  const note = (cam: Camera, e: unknown) => { failed++; log.warn(`camera ${cam.name} (channel ${cam.channel}${cam.preset !== null ? `, preset ${cam.preset}` : ""}): ${e instanceof Error ? e.message : String(e)}`); };
+  for (const cam of due.filter((c) => c.preset === null)) {
+    try { await takeShot(cam); taken++; } catch (e) { note(cam, e); }
+  }
+  // Turning cameras: every preset of a channel in one round, back to its usual view once at the end.
+  for (const channel of new Set(due.filter((c) => c.preset !== null).map((c) => c.channel))) {
+    await oneAtATime(async () => {
+      try {
+        for (const cam of due.filter((c) => c.channel === channel && c.preset !== null)) {
+          try { await turnTo(channel, cam.preset!); await grabShot(cam); taken++; } catch (e) { note(cam, e); }
+        }
+      } finally { await turnHome(channel); }
+    });
   }
   if (taken || failed) log.info(`camera pictures: ${taken} taken, ${failed} failed`);
   return { taken, failed };
