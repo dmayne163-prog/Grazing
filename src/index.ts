@@ -9,7 +9,7 @@ import { stockApi } from "./api/stock-routes.js";
 import { rainApi } from "./api/rain-routes.js";
 import { animalApi } from "./api/animal-routes.js";
 import { climateApi } from "./api/climate-routes.js";
-import { pastureApi } from "./api/pasture-routes.js";
+import { pastureApi, refreshPlanSoon } from "./api/pasture-routes.js";
 import { startClimateSync } from "./climate/silo.js";
 import { startOptiweighSync } from "./animals/optiweigh-sync.js";
 import { startAutoGauge } from "./rain/autogauge.js";
@@ -65,6 +65,12 @@ app.use(attachUser);
 app.use("/api", noStore);
 // A change sent twice from a phone's offline queue is only made once.
 app.use("/api", offlineOnce);
+// Anything saved (a move, an import, a mob edit) may change the rotation plan:
+// work it out again in the background, so the Rotation tab finds it ready.
+app.use("/api", (req, res, next) => {
+  if (req.method !== "GET") res.on("finish", () => { if (res.statusCode < 400) refreshPlanSoon(); });
+  next();
+});
 // For the container healthcheck. Says nothing about the farm.
 app.get("/api/health", (_req, res) => { res.json({ ok: true }); });
 app.use("/api/auth", auth);

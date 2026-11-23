@@ -9,6 +9,9 @@ import { FEED_HORIZON, makePlan, planGroups, planRules, setPlanRules } from "../
 import { allSegments, today } from "../stock/store.js";
 import { parseWhen, setGate, StockError } from "../stock/actions.js";
 import { Worker } from "node:worker_threads";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { config } from "../config.js";
 import { logger } from "../logger.js";
 import {
   ciboBoundary, commitCibo, commitPastureKey, coverage, farmReadings, paddockLatest, paddockSeries, parseCiboUpload,
@@ -295,29 +298,86 @@ pastureApi.put("/pasture/capacity/:id/condition", requireAdmin, express.json(), 
 
 /** For each mob: days left where it is, when to move, and the best paddocks to go to. */
 /**
- * The projection takes several seconds, and the Rotation tab asks for it every
- * time the app opens. It only changes when stock moves (the groups), the rules,
- * the day, or new pasture readings come in, so it's kept until one of those
- * does, or half an hour passes (for new weather).
+ * The projection takes several seconds, so it's worked out ahead and kept, on
+ * disk as well so a restart doesn't lose it. It's worked out again when stock
+ * moves or a mob changes (the groups), the residual changes, new pasture
+ * readings come in, or it's a week old (for new weather). Anything that saves
+ * (moves, imports, edits) starts that in the background straight away, so the
+ * Rotation tab nearly always finds it ready. Days in a paddock, and the days
+ * left where a mob is, are counted from today each time it's asked for.
  */
-let planCache: { key: string; at: number; proj: PlanProjection | null } | null = null;
-export function forgetPlan(): void { planCache = null; }
+const PLAN_FILE = join(config.dataDir, "plan-cache.json");
+const PLAN_MAX_AGE = 7 * 24 * 3600_000;
+type PlanStore = { key: string; at: number; day: string; proj: PlanProjection | null };
+let planCache: PlanStore | null = (() => {
+  try { return JSON.parse(readFileSync(PLAN_FILE, "utf8")) as PlanStore; } catch { return null; }
+})();
+let planRun: { key: string; job: Promise<PlanStore> } | null = null;
+let planStale = false; // new readings: work it out again whatever the key says
+
+function planInputs() {
+  const rules = planRules();
+  const groups = planGroups();
+  // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
+  const cap = Math.max(FEED_HORIZON, rules.max_days);
+  return { rules, groups, cap, key: JSON.stringify({ groups, r: rules.residual, cap }) };
+}
+
+function workOutPlan(key: string, groups: PlanGroup[], residual: number, cap: number): Promise<PlanStore> {
+  if (planRun?.key === key) return planRun.job;
+  planStale = false;
+  const job = runJob<PlanProjection | null>({ job: "plan", groups, residual, cap }).then((proj) => {
+    const store = { key, at: Date.now(), day: today(), proj };
+    if (planRun?.job === job) planRun = null;
+    planCache = store;
+    try { writeFileSync(PLAN_FILE, JSON.stringify(store)); } catch (e) { log.warn("couldn't save the plan cache", e); }
+    return store;
+  }, (e) => { if (planRun?.job === job) planRun = null; throw e; });
+  planRun = { key, job };
+  return job;
+}
+
+const planFresh = (key: string) => !!planCache && !planStale && planCache.key === key && Date.now() - planCache.at < PLAN_MAX_AGE;
+
+/** Work the plan out again in the background if anything it depends on has changed. */
+let planTimer: NodeJS.Timeout | null = null;
+export function refreshPlanSoon(): void {
+  if (planTimer) clearTimeout(planTimer);
+  planTimer = setTimeout(() => {
+    planTimer = null;
+    try {
+      const { groups, rules, cap, key } = planInputs();
+      if (!planFresh(key)) workOutPlan(key, groups, rules.residual, cap).catch((e) => log.error("rotation plan failed", e));
+    } catch (e) { log.error("rotation plan failed", e); }
+  }, 3000);
+}
+export function forgetPlan(): void { planStale = true; refreshPlanSoon(); }
+// Ready after a restart, and fresh each week even if nothing is saved.
+refreshPlanSoon();
+setInterval(refreshPlanSoon, 6 * 3600_000).unref();
+
+/** A projection from an earlier day: the feed where each mob is has had that many days' grazing since. */
+function ageProjection(proj: PlanProjection, from: string): PlanProjection {
+  const gone = Math.max(0, Math.round((Date.parse(`${today()}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400_000));
+  if (!gone) return proj;
+  const current: PlanProjection["current"] = {};
+  for (const [k, c] of Object.entries(proj.current)) {
+    current[k] = { ...c, days: c.days && { low: Math.max(0, c.days.low - gone), median: Math.max(0, c.days.median - gone) } };
+  }
+  return { ...proj, current };
+}
 
 pastureApi.get("/plan", async (_req, res) => {
-  const rules = planRules();
   try {
-    const groups = planGroups();
-    // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
-    const cap = Math.max(FEED_HORIZON, rules.max_days);
-    const key = JSON.stringify({ groups, r: rules.residual, cap, d: today() });
-    let proj: PlanProjection | null;
-    if (planCache && planCache.key === key && Date.now() - planCache.at < 30 * 60_000) proj = planCache.proj;
-    else {
-      proj = await runJob<PlanProjection | null>({ job: "plan", groups, residual: rules.residual, cap });
-      planCache = { key, at: Date.now(), proj };
-    }
-    if (!proj) { res.json({ ok: false, reason: "No pasture readings yet: import Cibo's PastureKey readings first." }); return; }
-    res.json({ ok: true, ...makePlan(proj, rules) });
+    const { rules, groups, cap, key } = planInputs();
+    let store: PlanStore;
+    if (planCache && !planStale && planCache.key === key) {
+      // A week-old one is still served, and worked out again behind it.
+      store = planCache;
+      if (!planFresh(key)) workOutPlan(key, groups, rules.residual, cap).catch((e) => log.error("rotation plan failed", e));
+    } else store = await workOutPlan(key, groups, rules.residual, cap);
+    if (!store.proj) { res.json({ ok: false, reason: "No pasture readings yet: import Cibo's PastureKey readings first." }); return; }
+    res.json({ ok: true, ...makePlan(ageProjection(store.proj, store.day), rules), worked_out: store.at });
   } catch (e) {
     log.error("rotation plan failed", e);
     res.status(500).json({ error: "The plan couldn't be worked out" });

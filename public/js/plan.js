@@ -17,15 +17,25 @@ const FEED_HORIZON = 120; // as the server projects (src/pasture/plan.ts)
 const feedDays = (o) => (o.days.median >= FEED_HORIZON ? `${FEED_HORIZON}+` : nf(o.days.median));
 const walkText = (n) => (n === 1 ? "next door" : `${n} gates away`);
 
-// The plan takes a few seconds (the pasture model), so the tab shows the last
-// one straight away and refreshes it when it's more than a couple of minutes old.
-let lastPlan = null, lastAt = 0, pending = null;
+// The server keeps the plan worked out ahead, so asking is quick; the tab still
+// shows the last one straight away (kept on this device too, for when the app
+// opens) and checks for a newer one when it's more than a couple of minutes old.
+const KEEP = "grazing.lastPlan";
+let lastPlan = (() => { try { return JSON.parse(localStorage.getItem(KEEP) || "null"); } catch { return null; } })();
+let lastAt = 0, pending = null;
+
+/** When the plan was last worked out, as "today 9:15 am" or "Mon 23 Nov". */
+function workedOut(ms) {
+  const d = new Date(ms), now = new Date();
+  const t = d.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? `today ${t}` : d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
+}
 
 /** Two lines per paddock in use: how long the stock has been in, and where next. */
 export async function renderRotation(el, ctx) {
   if (lastPlan) drawRotation(el, ctx, lastPlan);
   if (lastPlan && Date.now() - lastAt < 120_000) return;
-  if (!lastPlan) el.innerHTML = '<p class="muted small">Working out the plan… (the pasture model takes a few seconds)</p>';
+  if (!lastPlan) el.innerHTML = '<p class="muted small">Getting the plan…</p>';
   // The panel redraws often while the app loads: share one request between them.
   if (!pending) pending = get("/api/plan").finally(() => { pending = null; });
   let p;
@@ -36,13 +46,14 @@ export async function renderRotation(el, ctx) {
     return;
   }
   lastPlan = p; lastAt = Date.now();
+  try { localStorage.setItem(KEEP, JSON.stringify(p)); } catch { /* private window: fine */ }
   // Draw into whichever copy of the tab is on screen now.
   const live = el.isConnected ? el : document.getElementById("rotationTab");
   if (live) drawRotation(live, ctx, p);
 }
 
 /** Forget the cached plan, e.g. after a move, so the tab works it out again. */
-export function forgetRotation() { lastPlan = null; lastAt = 0; }
+export function forgetRotation() { lastPlan = null; lastAt = 0; try { localStorage.removeItem(KEEP); } catch { /* fine */ } }
 
 function drawRotation(el, ctx, p) {
   if (!p.ok) { el.innerHTML = `<p class="muted small">${escapeHtml(p.reason)}</p>`; return; }
@@ -78,7 +89,7 @@ function drawRotation(el, ctx, p) {
       </li>`).join("")}</ul>` : '<p class="muted small">No stock in paddocks.</p>'}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     <div class="btns"><button class="btn" id="rotFull">Full planner: other options and why…</button></div>
-    <p class="muted tiny">Most urgent first. Leave ${nf(r.residual)} kg/ha, stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}. Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
+    <p class="muted tiny">Most urgent first. Leave ${nf(r.residual)} kg/ha, stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, Cibo readings come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
   el.querySelectorAll("[data-pad]").forEach((b) => { b.onclick = () => ctx.select(Number(b.dataset.pad), { zoom: true }); });
   el.querySelectorAll("[data-mob]").forEach((b) => { b.onclick = () => ctx.selectMob(Number(b.dataset.mob)); });
   el.querySelector("#rotFull").onclick = () => openPlan(ctx);
