@@ -44,7 +44,7 @@ const state = {
   /** Rest and use per paddock id, and when the stock records begin. */
   grazing: new Map(),
   recordsBegin: null,
-  /** The latest Cibo PastureKey reading per paddock id. */
+  /** The latest pasture reading per paddock id: Cibo PastureKey, or the app's satellite estimate where newer. */
   pasture: new Map(),
   gates: [],
   /** An individual animal open in the panel, if any. */
@@ -574,7 +574,7 @@ function paddockTable(paddocks) {
         <th data-sort="head" class="num">Head${arrow("head")}</th>
         ${state.grazing.size ? `<th data-sort="grazed" class="num" title="Days the stock now in it have been in">Grazed${arrow("grazed")}</th>` : ""}
         ${state.grazing.size ? `<th data-sort="rest" class="num" title="Days since last grazed">Rest${arrow("rest")}</th>` : ""}
-        ${state.pasture.size ? `<th data-sort="pasture" class="num" title="Pasture, kg dry matter a hectare (Cibo PastureKey)">Pasture${arrow("pasture")}</th>` : ""}
+        ${state.pasture.size ? `<th data-sort="pasture" class="num" title="Pasture, kg dry matter a hectare (${pastureSource()})">Pasture${arrow("pasture")}</th>` : ""}
       </tr></thead>
       <tbody>${rows.map((f) => `
         <tr class="row" data-id="${f.id}">
@@ -588,6 +588,11 @@ function paddockTable(paddocks) {
         </tr>`).join("")}
       </tbody>
     </table>`;
+}
+
+/** Where the pasture figures in the list and on the map come from. */
+function pastureSource() {
+  return [...state.pasture.values()].some((v) => v.source === "sentinel-estimate") ? "satellite estimate" : "Cibo PastureKey";
 }
 
 function pastureCell(id) {
@@ -668,7 +673,7 @@ function layersHtml() {
         <input type="checkbox" data-pasture ${localGet("pastureLayer") === "1" ? "checked" : ""}>
         Colour paddocks by pasture
       </label></div>
-      <div class="pasturekey small">${PASTURE_BINS.map((b) => `<span><span class="swatch" data-colour="${b.colour}"></span>${b.label}</span>`).join("")}<span class="muted">kg/ha · Cibo PastureKey, ${shortDay([...state.pasture.values()][0].date)}</span></div>` : ""}
+      <div class="pasturekey small">${PASTURE_BINS.map((b) => `<span><span class="swatch" data-colour="${b.colour}"></span>${b.label}</span>`).join("")}<span class="muted">kg/ha · ${pastureSource()}, ${shortDay([...state.pasture.values()].map((v) => v.date).sort().pop())}</span></div>` : ""}
     <p class="muted small gap-top"><span class="swatch" data-colour="#5FBE8E"></span>A green outline marks paddocks open into each other; green gates are open.</p>
     <p class="muted small">Imagery is chosen with the layers button at the bottom-left of the map.</p>`;
 }
@@ -1229,7 +1234,7 @@ function featureHtml(f) {
     ${p.kind === "paddock" ? stockHtml(f) : ""}
     ${p.kind === "paddock" ? feedCheckSectionHtml() : ""}
     ${p.kind === "paddock" ? plantingsSectionHtml() : ""}
-    ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture · Cibo PastureKey</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
+    ${p.kind === "paddock" && state.pasture.has(f.id) ? `<h3>Pasture</h3><div id="paddockPasture"><p class="muted small">Loading…</p></div>` : ""}
     ${p.kind === "paddock" ? `
       <h3>Who was here</h3>
       <div class="row2"><div class="f"><label for="whoDate">On</label><input type="date" id="whoDate" value="${todayIso()}"></div><div></div></div>

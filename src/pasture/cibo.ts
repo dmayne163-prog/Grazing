@@ -10,6 +10,7 @@
  * of dry matter per hectare, estimated from satellite imagery.
  */
 import { strFromU8, unzipSync } from "fflate";
+import { SAT, satelliteInUse } from "./sentinel.js";
 import type { MultiPolygon, Polygon } from "geojson";
 import { db, getSetting, setSetting } from "../db/database.js";
 import { areaM2 } from "../map/geometry.js";
@@ -241,20 +242,29 @@ export function commitPastureKey(readings: PaddockReading[], filename: string): 
 }
 
 export interface PaddockLatest {
+  /** Where the figure came from: PastureKey, or the app's satellite estimate where that is newer and in use. */
+  source: string;
   feature_id: number; date: string; tsdm: number; error: number | null; green: number | null;
   change_rate: number | null; captured_pct: number | null; month_ago: number | null;
 }
 
-/** The newest PastureKey reading for each paddock, with the reading about a month before it. */
+/**
+ * The newest reading for each paddock, with the reading about a month before
+ * it: PastureKey's, or the app's own satellite estimate once that is newer
+ * (when the estimate is in use). On the same day PastureKey wins.
+ */
 export function paddockLatest(): PaddockLatest[] {
+  const sources = satelliteInUse() ? [PK, SAT] : [PK];
+  const list = sources.map(() => "?").join(", ");
   const rows = db.prepare(`
-    SELECT o.feature_id, o.date, o.tsdm_p50 AS tsdm, o.tsdm_error AS error, o.green, o.change_rate, o.captured_pct,
-      (SELECT p.tsdm_p50 FROM pasture_obs p WHERE p.feature_id = o.feature_id AND p.source = o.source
-         AND p.date <= date(o.date, '-28 days') ORDER BY p.date DESC LIMIT 1) AS month_ago
+    SELECT o.feature_id, o.date, o.source, o.tsdm_p50 AS tsdm, o.tsdm_error AS error, o.green, o.change_rate, o.captured_pct,
+      (SELECT p.tsdm_p50 FROM pasture_obs p WHERE p.feature_id = o.feature_id AND p.source IN (${list}) AND p.tsdm_p50 IS NOT NULL
+         AND p.date <= date(o.date, '-28 days') ORDER BY p.date DESC, p.source = '${PK}' DESC LIMIT 1) AS month_ago
     FROM pasture_obs o
-    WHERE o.source = ? AND o.feature_id != 0
-      AND o.date = (SELECT MAX(date) FROM pasture_obs m WHERE m.feature_id = o.feature_id AND m.source = o.source)
-  `).all(PK) as PaddockLatest[];
+    WHERE o.source IN (${list}) AND o.feature_id != 0
+      AND o.id = (SELECT m.id FROM pasture_obs m WHERE m.feature_id = o.feature_id AND m.source IN (${list}) AND m.tsdm_p50 IS NOT NULL
+                  ORDER BY m.date DESC, m.source = '${PK}' DESC LIMIT 1)
+  `).all(...sources, ...sources, ...sources) as PaddockLatest[];
   return rows;
 }
 

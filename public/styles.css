@@ -575,6 +575,7 @@ table.outlook td,table.outlook th{padding:5px 6px}
 .residual{display:flex;align-items:center;gap:8px}
 .residual input{width:90px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;color:var(--ink)}
 .sw-outlook{width:12px;height:10px;background:rgba(25,158,112,.3);border-radius:2px}
+.sw-satellite{width:14px;height:2px;border-radius:1px;background:#3D8BD9}
 .legend [hidden]{display:none}
 
 /* Inferred, not recorded: gate openings worked out from the pasture readings. */

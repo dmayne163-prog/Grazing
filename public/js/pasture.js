@@ -12,6 +12,9 @@ import { openCapacity } from "./capacity.js";
 // Validated on the dark surface (#151A1D) beside the SILO orange: lightness
 // band, chroma, colour-blind separation and 3:1 contrast all pass.
 const PASTURE = "#199e70";
+// The app's own satellite estimate: a blue, apart from PastureKey's green in hue and lightness.
+const SATELLITE = "#3D8BD9";
+const SAT_SOURCE = "sentinel-estimate";
 let REF = "#A3B1B7"; // the district reference: a neutral, not a series hue
 let GRID = "#1F282C", AXIS = "#3A464C", TICK_TEXT = "#75848B", INK = "#E7EEF0", SURFACE = "#151A1D";
 /** Chart colours follow the app's light or dark mode: read them when a chart is drawn. */
@@ -55,11 +58,59 @@ export async function renderPasture(el, ctx) {
     return;
   }
 
-  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}<div id="longTerm"></div>${importBtn}`;
+  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}<div id="satellite"></div>${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}<div id="longTerm"></div>${importBtn}`;
   bind();
+  loadSatellite(el.querySelector("#satellite"), ctx, () => renderPasture(el, ctx));
   if (farm.length) drawPasture(el.querySelector("#pastureChart"), farm);
   loadOutlook(el.querySelector("#outlook"), ctx);
   loadLongTerm(el.querySelector("#longTerm"), ctx);
+}
+
+/* ---------------------------- satellite estimate ---------------------------- */
+
+/**
+ * The app's own estimate from the free Sentinel-2 satellite: where it's up to,
+ * how closely it matched PastureKey, and whether the planner starts from it.
+ */
+async function loadSatellite(host, ctx, redraw) {
+  if (!host) return;
+  let s;
+  try { s = await get("/api/pasture/sentinel"); } catch { return; }
+  if (!host.isConnected) return;
+  const m = s.model;
+  const state = s.running ? `Checking now: ${escapeHtml(s.progress || "working")}…`
+    : s.error ? `The last check failed (${escapeHtml(s.error)}); it will try again within half an hour.`
+    : s.last_pass ? `Latest pass read: <b>${fmtDay(s.last_pass)}</b>${s.last_estimate && s.last_estimate !== s.last_pass ? ` (latest clear one ${fmtDay(s.last_estimate)})` : ""}. Checked ${s.checked_on ? fmtDay(s.checked_on) : "not yet"}; it looks again each morning.`
+    : s.enabled ? "No passes read yet. The first check fetches the whole PastureKey period and takes ten minutes or so." : "Turned off on this server.";
+  host.innerHTML = `
+    <h3>Satellite estimate</h3>
+    <p class="small">The app's own paddock figures from the free Sentinel-2 satellite (the one Cibo Labs uses), which passes every few days.
+      ${m ? `They are fitted to <b>${m.n.toLocaleString("en-AU")}</b> of this property's PastureKey readings (${fmtDay(m.from)} to ${fmtDay(m.to)}). On readings held back from the fitting they were typically within <b>${m.tsdm_error} kg/ha</b> of PastureKey for total pasture, and ${m.green_error} kg/ha for green.`
+        : "There is no estimate yet: it needs about 200 PastureKey paddock readings on clear days to be fitted."}</p>
+    <p class="small muted">${state}</p>
+    ${m ? `<p class="small muted">It estimates what PastureKey would say; it is not a measurement of the paddock, and only pasture cut and weighed here can show how close either is. Each paddock's chart shows it as a blue line beside PastureKey${s.last_pasturekey ? `, whose readings stop at ${fmtDay(s.last_pasturekey)}. From then on each paddock's estimate is shifted by its own gap to PastureKey over the two months before, a shift that fades over the following months` : ""}.</p>` : ""}
+    ${m && ctx.canEdit ? `<label class="small"><input type="checkbox" id="satUse"${s.in_use ? " checked" : ""}> Use it where there is no newer PastureKey reading: in the paddock list, on the map and as the starting point for the rotation planner</label>` : m ? `<p class="small muted">${s.in_use ? "In use where there is no newer PastureKey reading." : "Shown on charts only; not used by the rotation planner."}</p>` : ""}
+    ${ctx.canEdit && s.enabled ? `<div class="btns gap-top"><button class="btn" id="satSync"${s.running ? " disabled" : ""}>Check for new passes now</button></div>` : ""}`;
+  const use = host.querySelector("#satUse");
+  if (use) use.onchange = async () => {
+    use.disabled = true;
+    try { await send("PUT", "/api/pasture/sentinel/use", { on: use.checked }); } catch (e) { alert(e.message); }
+    redraw();
+  };
+  const sync = host.querySelector("#satSync");
+  if (sync) sync.onclick = async () => {
+    sync.disabled = true;
+    try { await send("POST", "/api/pasture/sentinel/sync", {}); } catch (e) { alert(e.message); return; }
+    // Watch it through; a first run takes a while, so the tab can be left and reopened.
+    const poll = async () => {
+      if (!host.isConnected) return;
+      let now;
+      try { now = await get("/api/pasture/sentinel"); } catch { return; }
+      if (now.running) { const p = host.querySelector(".small.muted"); if (p) p.textContent = `Checking now: ${now.progress || "working"}…`; setTimeout(poll, 4000); }
+      else redraw();
+    };
+    setTimeout(poll, 2000);
+  };
 }
 
 /* -------------------------------- long-term -------------------------------- */
@@ -239,7 +290,7 @@ function paddockSection(latest, ctx) {
       <dt>Average</dt><dd>${kg(area ? (foo * 1000) / area : null)} <span class="muted">over ${Math.round(area).toLocaleString("en-AU")} ha</span></dd>
       <dt>Last month</dt><dd>${diff >= 0 ? "+" : "−"}${dm(Math.abs(diff))} <span class="muted">(${diff >= 0 ? "+" : "−"}${Math.abs(Math.round((diff / Math.max(1, monthAgoFoo)) * 100))}%)</span></dd>
     </dl>
-    <h3>Paddocks · Cibo PastureKey</h3>
+    <h3>Paddocks · ${rows.some((r) => r.source === SAT_SOURCE) ? `satellite estimate${rows.some((r) => r.source !== SAT_SOURCE) ? " and Cibo PastureKey" : ""}` : "Cibo PastureKey"}</h3>
     <table class="list">
       <thead><tr><th>Paddock</th><th class="num">Pasture</th><th class="num">Green</th><th>Trend</th><th class="num">Feed</th></tr></thead>
       <tbody>${rows.map((r) => {
@@ -402,18 +453,24 @@ function drawPasture(host, rows) {
  * paddock shaded behind it so the effect of grazing and rest can be seen.
  */
 export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) {
-  let series, grazing;
+  let series, grazing, sat;
   try {
-    [series, grazing] = await Promise.all([
+    [series, grazing, sat] = await Promise.all([
       get(`/api/pasture/paddocks/${featureId}`),
       get(`/api/paddocks/${featureId}/grazing`).catch(() => null),
+      get(`/api/pasture/paddocks/${featureId}/satellite`).catch(() => []),
     ]);
   } catch {
     el.innerHTML = '<p class="muted small">Not available offline.</p>';
     return;
   }
+  // A paddock PastureKey never covered still has the satellite estimate to show.
+  const onlySat = !series.length && sat.length > 0;
+  if (onlySat) { series = sat; sat = []; }
   if (!stillCurrent() || !series.length) { if (!series?.length) el.innerHTML = ""; return; }
   const last = series[series.length - 1];
+  const sLast = sat.length ? sat[sat.length - 1] : null;
+  const satNewer = sLast && sLast.date > last.date;
   const t = trendWord(last.change_rate);
   const monthAgo = series.slice().reverse().find((r) => r.date <= shiftDays(last.date, -28));
   const greenShare = last.green !== null && last.tsdm ? Math.round((last.green / last.tsdm) * 100) : null;
@@ -421,14 +478,16 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
 
   el.innerHTML = `
     <dl class="facts">
-      <dt>${fmtDay(last.date)}</dt><dd><b>${kg(last.tsdm)}</b>${last.error ? ` <span class="muted">± ${Math.round(last.error)}</span>` : ""} · <span class="trend ${t.cls}">${t.arrow}</span> ${t.word}${last.change_rate !== null ? ` <span class="muted">(${last.change_rate > 0 ? "+" : ""}${last.change_rate} kg/ha a day)</span>` : ""}</dd>
+      ${satNewer ? `<dt>${fmtDay(sLast.date)}</dt><dd><b>${kg(sLast.tsdm)}</b>${sLast.error ? ` <span class="muted">± ${Math.round(sLast.error)}</span>` : ""} <span class="muted">satellite estimate${sLast.green !== null ? `, ${kg(sLast.green)} of it green` : ""}</span></dd>` : ""}
+      <dt>${fmtDay(last.date)}</dt><dd><b>${kg(last.tsdm)}</b>${last.error ? ` <span class="muted">± ${Math.round(last.error)}</span>` : ""}${satNewer ? ' <span class="muted">PastureKey\'s last</span>' : onlySat ? ' <span class="muted">satellite estimate</span>' : ""} · <span class="trend ${t.cls}">${t.arrow}</span> ${t.word}${last.change_rate !== null ? ` <span class="muted">(${last.change_rate > 0 ? "+" : ""}${last.change_rate} kg/ha a day)</span>` : ""}</dd>
       <dt>Green</dt><dd>${kg(last.green)}${greenShare !== null ? ` <span class="muted">(${greenShare}% of it)</span>` : ""}</dd>
       <dt>Feed on offer</dt><dd>${areaHa ? `${Math.round((last.tsdm * areaHa) / 1000).toLocaleString("en-AU")} t of dry matter` : "—"}</dd>
       ${monthAgo ? `<dt>A month before</dt><dd>${kg(monthAgo.tsdm)} <span class="muted">${fmtDay(monthAgo.date)}</span></dd>` : ""}
     </dl>
     ${last.captured_pct !== null && last.captured_pct < 50 ? `<p class="muted tiny">The satellite saw only ${Math.round(last.captured_pct)}% of the paddock clearly on that pass (cloud), so the latest figure leans on Cibo's model.</p>` : ""}
     <div class="legend">
-      <span><i class="sw sw-pasture"></i>Total pasture</span>
+      <span><i class="sw sw-pasture"></i>Total pasture${sat.length ? " (PastureKey)" : onlySat ? " (satellite estimate)" : ""}</span>
+      ${sat.length ? '<span><i class="sw sw-satellite"></i>Satellite estimate</span>' : ""}
       <span><i class="sw sw-pasture-band"></i>Green part</span>
       ${periods.length ? '<span><i class="sw sw-grazed"></i>Stock in the paddock</span>' : ""}
       <span class="ol-key" hidden><i class="sw sw-outlook"></i>Outlook: past seasons' range, median dashed</span>
@@ -442,19 +501,19 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
           <td class="num muted">${r.captured_pct === null ? "—" : `${Math.round(r.captured_pct)}%`}</td></tr>`).join("")}
       </tbody></table>
     </details>`;
-  drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods);
+  drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods, null, sat);
 
   // The outlook can take a few seconds the first time; the readings show meanwhile.
   let ol = null;
   try { ol = await get(`/api/pasture/outlook/${featureId}`); } catch { return; }
   if (!ol || !stillCurrent() || !el.isConnected || !ol.series?.length) return;
-  drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods, ol);
+  drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods, ol, sat);
   el.querySelector(".ol-key").hidden = false;
   const R = ol.residual.toLocaleString("en-AU");
   const span = (v) => `${Math.round(v.median).toLocaleString("en-AU")} <span class="muted">(${Math.round(v.low).toLocaleString("en-AU")}–${Math.round(v.high).toLocaleString("en-AU")})</span>`;
   el.querySelector("#paddockOutlook").innerHTML = `
     <dl class="facts gap-top">
-      <dt>Today</dt><dd>about <b>${kg(ol.now)}</b> <span class="muted">${ol.check ? `estimated on from your feed check of ${fmtDay(ol.check.date)} (${kg(ol.check.kg_ha)})` : "estimated on from the last reading"}</span></dd>
+      <dt>Today</dt><dd>about <b>${kg(ol.now)}</b> <span class="muted">${ol.check ? `estimated on from your feed check of ${fmtDay(ol.check.date)} (${kg(ol.check.kg_ha)})` : ol.last_reading?.source === "satellite" ? `estimated on from the satellite estimate of ${fmtDay(ol.last_reading.date)}` : "estimated on from the last reading"}</span></dd>
       ${ol.days_left ? `<dt>To ${R} kg/ha</dt><dd><b>${daysText(ol.days_left.median)} days</b> <span class="muted">with the stock now in it (${ol.ae_per_ha.toFixed(2)} AE/ha); ${daysText(ol.days_left.low)} in a poor run, ${daysText(ol.days_left.high)} in a good one</span></dd>` : ""}
       <dt>In 3 months</dt><dd>${span(ol.at["90"])} kg/ha</dd>
       <dt>In 6 months</dt><dd>${span(ol.at["180"])} kg/ha</dd>
@@ -471,17 +530,17 @@ const shiftDays = (d, n) => {
 
 let GRAZED = "#A3B1B7";
 
-function drawPaddockPasture(host, rows, periods, ol = null) {
+function drawPaddockPasture(host, rows, periods, ol = null, sat = []) {
   if (!host) return;
   const W = Math.max(280, host.clientWidth || 340), H = Math.round(Math.min(250, Math.max(170, W * 0.36)));
   const pad = { l: 42, r: 8, t: 14, b: 20 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
   const fan = ol?.series?.length ? ol.series : [];
-  const max = Math.max(500, ...rows.map((r) => r.tsdm + (r.error || 0)), ...fan.map((f) => f.p90), ol?.residual || 0);
+  const max = Math.max(500, ...rows.map((r) => r.tsdm + (r.error || 0)), ...sat.map((r) => r.tsdm), ...fan.map((f) => f.p90), ol?.residual || 0);
   const step = max > 4000 ? 1000 : max > 2000 ? 500 : 250;
   const top = Math.ceil(max / step) * step;
   const first = rows[0].date;
-  const lastD = fan.length ? fan[fan.length - 1].date : rows[rows.length - 1].date;
+  const lastD = [fan.length ? fan[fan.length - 1].date : rows[rows.length - 1].date, sat.length ? sat[sat.length - 1].date : ""].sort().pop();
   const t0 = Date.parse(first), t1 = Date.parse(lastD);
   const x = (d) => pad.l + ((Math.min(t1, Math.max(t0, Date.parse(d))) - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (v) => pad.t + plotH - (v / top) * plotH;
@@ -545,6 +604,13 @@ function drawPaddockPasture(host, rows, periods, ol = null) {
     add("text", { x: W - pad.r - 2, y: yr - 4, "text-anchor": "end", "font-size": 10, fill: "#E0A845" }).textContent = `graze to ${ol.residual.toLocaleString("en-AU")}`;
   }
 
+  // The satellite estimate under PastureKey's line, so where they overlap both can be seen.
+  const satIn = sat.filter((r) => r.date >= first);
+  if (satIn.length > 1) {
+    add("path", { d: path(satIn.map((r) => [x(r.date), y(r.tsdm)])), fill: "none", stroke: SATELLITE, "stroke-width": 1.5, "stroke-linejoin": "round" });
+    const sl = satIn[satIn.length - 1];
+    add("circle", { cx: x(sl.date), cy: y(sl.tsdm), r: 3, fill: SATELLITE, stroke: SURFACE, "stroke-width": 1.5 });
+  }
   add("path", { d: path(rows.map((r) => [x(r.date), y(r.tsdm)])), fill: "none", stroke: PASTURE, "stroke-width": 2, "stroke-linejoin": "round" });
   const lr = rows[rows.length - 1];
   add("circle", { cx: x(lr.date), cy: y(lr.tsdm), r: 4, fill: PASTURE, stroke: SURFACE, "stroke-width": 2 });

@@ -517,6 +517,28 @@ CREATE TABLE IF NOT EXISTS feed_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_feed_checks_feature ON feed_checks(feature_id, checked_on);
 
+-- Sentinel-2: one row per paddock per satellite pass, the average of each colour
+-- band over the pixels seen clearly. The satellite estimate is worked out from
+-- these, so the model can be refitted without fetching the imagery again.
+CREATE TABLE IF NOT EXISTS sentinel_bands (
+  feature_id  INTEGER NOT NULL,
+  date        TEXT    NOT NULL,
+  pixels      INTEGER NOT NULL,         -- 40 m pixels inside the paddock
+  seen        INTEGER NOT NULL,         -- of those, inside the satellite's swath
+  clear       INTEGER NOT NULL,         -- of those, free of cloud and shadow
+  bands       TEXT,                     -- JSON band averages; null when nothing was clear
+  scene       TEXT,
+  fetched_at  INTEGER NOT NULL,
+  PRIMARY KEY (feature_id, date)
+);
+-- The passes already looked at; an incomplete one is tried again for a few days.
+CREATE TABLE IF NOT EXISTS sentinel_passes (
+  date        TEXT PRIMARY KEY,
+  scenes      TEXT    NOT NULL,
+  complete    INTEGER NOT NULL,
+  fetched_at  INTEGER NOT NULL
+);
+
 -- Small key/value settings changed from the app rather than the environment.
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

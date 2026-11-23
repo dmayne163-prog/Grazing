@@ -32,6 +32,7 @@
  * of outcomes is the spread of seasons this country has had.
  */
 import { latestChecks } from "./feedchecks.js";
+import { SAT, satelliteInUse } from "./sentinel.js";
 import { db, getSetting } from "../db/database.js";
 import { paddockCells } from "../climate/silo.js";
 import { aeFromWeight, allSegments, mobViews, today, voidedIds } from "../stock/store.js";
@@ -142,10 +143,20 @@ interface Obs { day: number; tsdm: number; green: number | null; w: number }
 interface Paddock {
   id: number; name: string; area: number; cell: string; subtype: string | null;
   obs: Obs[];
+  /**
+   * The app's own satellite estimate, when it is newer than the last PastureKey
+   * reading: the paddock starts from it instead. Kept apart from `obs`, which
+   * the model is fitted on.
+   */
+  sat: Obs | null;
   /** The newest feed check, when it's newer than the last reading: the paddock starts from it. */
   check: { day: number; tsdm: number; rating: string | null; note: string | null; by: string | null } | null;
   ae: Float64Array; // AE per ha, day by day from the model's start
 }
+
+/** The reading a paddock's figure starts from: its last PastureKey reading, or a newer satellite estimate. */
+const startOf = (p: Paddock): Obs | null => p.sat ?? p.obs[p.obs.length - 1] ?? null;
+const sourceOf = (p: Paddock): "pasturekey" | "satellite" => (p.sat ? "satellite" : "pasturekey");
 
 interface Inputs {
   start: number; end: number; // day numbers; end = the last day with weather
@@ -226,20 +237,37 @@ function loadInputs(): Inputs | null {
   for (const f of feats) {
     const cell = cells.get(f.id);
     if (!cell || !f.area_ha) continue;
-    byId.set(f.id, { id: f.id, name: f.name, area: f.area_ha, cell, subtype: f.subtype, obs: [], check: null, ae: new Float64Array(n) });
+    byId.set(f.id, { id: f.id, name: f.name, area: f.area_ha, cell, subtype: f.subtype, obs: [], sat: null, check: null, ae: new Float64Array(n) });
   }
   for (const r of obsRows) {
     const p = byId.get(r.feature_id);
     // A clear view counts for more than a cloudy pass Cibo has filled in.
     if (p) p.obs.push({ day: dayNo(r.date), tsdm: r.tsdm_p50, green: r.green, w: 0.3 + 0.7 * Math.min(1, (r.captured_pct ?? 0) / 100) });
   }
-  // Feed checks: only one newer than the last reading counts (a new reading takes over).
+  // The satellite estimate carries on where PastureKey stops: the newest one
+  // after the paddock's last PastureKey reading, if the estimate is in use.
+  if (satelliteInUse()) {
+    const satRows = db.prepare(`
+      SELECT o.feature_id, o.date, o.tsdm_p50, o.green FROM pasture_obs o
+      WHERE o.source = ? AND o.feature_id != 0 AND o.tsdm_p50 IS NOT NULL
+        AND o.date = (SELECT MAX(date) FROM pasture_obs m WHERE m.feature_id = o.feature_id AND m.source = o.source)
+    `).all(SAT) as Array<{ feature_id: number; date: string; tsdm_p50: number; green: number | null }>;
+    for (const r of satRows) {
+      const p = byId.get(r.feature_id);
+      if (!p) continue;
+      const day = dayNo(r.date), last = p.obs[p.obs.length - 1];
+      if (day >= start && (!last || day > last.day)) p.sat = { day, tsdm: r.tsdm_p50, green: r.green, w: 1 };
+    }
+  }
+  // Feed checks: only one newer than the last reading counts (a new reading
+  // takes over). Against a satellite estimate the check also wins when the
+  // estimate is no more than two days newer: someone has seen the paddock.
   for (const [id, c] of latestChecks()) {
     const p = byId.get(id);
     if (!p) continue;
     const day = dayNo(c.checked_on);
-    const last = p.obs[p.obs.length - 1];
-    if (day >= start && (!last || day >= last.day)) p.check = { day, tsdm: c.kg_ha, rating: c.rating, note: c.note, by: c.username };
+    const last = startOf(p);
+    if (day >= start && (!last || day >= last.day - (last === p.sat ? 2 : 0))) p.check = { day, tsdm: c.kg_ha, rating: c.rating, note: c.note, by: c.username };
   }
 
   // Stock: each segment's AE spread over the paddocks it could reach, by area.
@@ -422,7 +450,7 @@ export interface PaddockOutlook {
   subtype: string | null;
   area_ha: number;
   multiplier: number | null;
-  last_reading: { date: string; tsdm: number; green: number | null } | null;
+  last_reading: { date: string; tsdm: number; green: number | null; source?: "pasturekey" | "satellite" } | null;
   /** A feed check newer than the last reading, which today's figure starts from. */
   check: { date: string; kg_ha: number; rating: string | null } | null;
   now: number | null;                 // estimate of total pasture for today, kg/ha
@@ -491,7 +519,7 @@ function projectionSetup() {
  * the model's share of green (a check doesn't say how green it is).
  */
 function stateToday(ctx: NonNullable<ReturnType<typeof projectionSetup>>, p: Paddock): Float64Array | null {
-  const last = p.obs[p.obs.length - 1];
+  const last = startOf(p);
   const chk = p.check;
   if (!last && !chk) return null;
   const m = ctx.fit?.multipliers.get(p.id) ?? 1;
@@ -526,14 +554,14 @@ export function buildOutlook(): Outlook | null {
   // Feed above the residual on the whole place, season by season, at each of those days.
   const propAhead = years.map(() => AHEAD.map(() => 0));
   for (const p of inp.paddocks) {
-    const last = p.obs[p.obs.length - 1] ?? null;
+    const last = startOf(p);
     const m = fit?.multipliers.get(p.id) ?? 1;
     const aeNow = p.ae[n - 1] ?? 0;
     const chk = p.check;
     propAe += aeNow * p.area;
     const o: PaddockOutlook = {
       id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1), multiplier: fit?.multipliers.has(p.id) ? m : null,
-      last_reading: last ? { date: isoOf(last.day), tsdm: last.tsdm, green: last.green } : null,
+      last_reading: last ? { date: isoOf(last.day), tsdm: last.tsdm, green: last.green, source: sourceOf(p) } : null,
       check: chk ? { date: isoOf(chk.day), kg_ha: chk.tsdm, rating: chk.rating } : null,
       now: null, now_green: null, ae_per_ha: round(aeNow, 3), days_left: null, at: null, capacity_ae: null, series: [],
     };
@@ -825,8 +853,8 @@ export interface PlanProjection {
 
 /** What went into a paddock's figures, so the planner can explain a suggestion. */
 export interface PlanFacts {
-  /** The latest Cibo PastureKey reading: total and green, kg/ha. */
-  reading: { date: string; tsdm: number; green: number | null } | null;
+  /** The reading today's figure starts from: the latest Cibo PastureKey reading, or a newer satellite estimate. Total and green, kg/ha. */
+  reading: { date: string; tsdm: number; green: number | null; source?: "pasturekey" | "satellite" } | null;
   /** A feed check newer than that reading: today's figure starts from it instead. */
   check: { date: string; kg_ha: number; rating: string | null; note: string | null; by: string | null } | null;
   now_green: number | null;
@@ -911,10 +939,10 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number,
   }
   const factsFor = (p: Paddock): PlanFacts => {
     const c = cellFacts.get(p.cell)!;
-    const last = p.obs[p.obs.length - 1] ?? null;
+    const last = startOf(p);
     const st = today.get(p.id);
     return {
-      reading: last ? { date: isoOf(last.day), tsdm: Math.round(last.tsdm), green: last.green === null ? null : Math.round(last.green) } : null,
+      reading: last ? { date: isoOf(last.day), tsdm: Math.round(last.tsdm), green: last.green === null ? null : Math.round(last.green), source: sourceOf(p) } : null,
       check: p.check ? { date: isoOf(p.check.day), kg_ha: Math.round(p.check.tsdm), rating: p.check.rating, note: p.check.note, by: p.check.by } : null,
       now_green: st ? Math.round(st[0]!) : null,
       multiplier: ctx.fit?.multipliers.has(p.id) ? round(ctx.fit.multipliers.get(p.id)!, 2) : null,
@@ -941,7 +969,7 @@ export function buildPlanProjection(groups: PlanGroup[], R: number, cap: number,
     paddocks: inp.paddocks.map((p) => ({
       id: p.id, name: p.name, subtype: p.subtype, area_ha: round(p.area, 1), floor: floorOf(p.id),
       now: today.has(p.id) ? Math.round(total(today.get(p.id)!)) : null,
-      last_reading: p.obs.length ? isoOf(p.obs[p.obs.length - 1]!.day) : null,
+      last_reading: startOf(p) ? isoOf(startOf(p)!.day) : null,
       ...factsFor(p),
     })),
   };

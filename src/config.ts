@@ -115,6 +115,15 @@ export const config = {
   siloHour: num("SILO_HOUR", 7),
 
   /**
+   * The satellite estimate: paddock pasture worked out from the free Sentinel-2
+   * archive. The first run fetches the whole PastureKey period (some hundreds
+   * of megabytes, read and discarded); after that a pass or two a week.
+   */
+  sentinelSync: bool("SENTINEL_SYNC", true),
+  /** Local hour after which the day's check for new passes runs. */
+  sentinelHour: num("SENTINEL_HOUR", 8),
+
+  /**
    * Optiweigh's API: the farm's client ID and API key, issued by Optiweigh.
    * The key is a password: it lives in local.env on the server, never in git.
    * With no key the app doesn't fetch from Optiweigh; file imports still work.

@@ -13,6 +13,7 @@ import { Worker } from "node:worker_threads";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "../config.js";
+import { SAT, onEstimatesChanged, refreshEstimates, satelliteSeries, satelliteStamp, sentinelStatus, syncSentinel } from "../pasture/sentinel.js";
 import { logger } from "../logger.js";
 import {
   ciboBoundary, commitCibo, commitPastureKey, coverage, farmReadings, paddockLatest, paddockSeries, parseCiboUpload,
@@ -55,13 +56,13 @@ pastureApi.get("/pasture/latest", (_req, res) => {
 let outlookCache: { key: string; value: Promise<Outlook | null> } | null = null;
 function outlook(): Promise<Outlook | null> {
   const k = db.prepare(`
-    SELECT (SELECT MAX(updated_at) FROM pasture_obs) || '|' ||
+    SELECT (SELECT MAX(updated_at) FROM pasture_obs WHERE source != '${SAT}') || '|' ||
            (SELECT COUNT(*) || ':' || IFNULL(MAX(id), 0) FROM mob_events) || '|' ||
            (SELECT IFNULL(MIN(last_date), '') FROM climate_cells) || '|' ||
            (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), 0) || ':' || IFNULL(MAX(deleted_at), 0) FROM features WHERE kind = 'paddock') || '|' ||
            (SELECT IFNULL(MAX(created_at), 0) FROM mobs) AS k
   `).get() as { k: string };
-  const key = `${k.k}|${residual()}|${checksStamp()}`;
+  const key = `${k.k}|${residual()}|${checksStamp()}|${satelliteStamp()}`;
   if (outlookCache?.key !== key) {
     const t0 = Date.now();
     const value = inWorker().then((o) => {
@@ -201,6 +202,49 @@ pastureApi.get("/pasture/paddocks/:id", (req, res) => {
   res.json(paddockSeries(Number(req.params["id"])));
 });
 
+/* --------------------------- satellite estimate --------------------------- */
+
+/** The app's own Sentinel-2 estimate for one paddock, oldest first. */
+pastureApi.get("/pasture/paddocks/:id/satellite", (req, res) => {
+  res.json(satelliteSeries(Number(req.params["id"])));
+});
+
+/** Where the satellite estimate is up to, and how well it matched PastureKey. */
+pastureApi.get("/pasture/sentinel", (_req, res) => {
+  res.json(sentinelStatus());
+});
+
+/** Looks for new passes now, in the background; the status says how it's going. */
+pastureApi.post("/pasture/sentinel/sync", requireAdmin, (_req, res) => {
+  syncSentinel().catch((e) => log.error("Sentinel-2 check failed", e));
+  res.json(sentinelStatus());
+});
+
+/** Fits the model again on the PastureKey readings held now, and reworks every estimate. */
+pastureApi.post("/pasture/sentinel/refit", requireAdmin, async (req, res) => {
+  try {
+    const changed = await refreshEstimates(true);
+    forgetPlan();
+    addEvent({ ts: Date.now(), source: "pasture", kind: "action", severity: "info", message: `${req.user?.username ?? null} refitted the satellite estimate (${changed} figures changed)`, value: null });
+    res.json({ ok: true, changed, status: sentinelStatus() });
+  } catch (e) {
+    log.error("refitting the satellite estimate failed", e);
+    res.status(500).json({ error: "The satellite estimate couldn't be refitted" });
+  }
+});
+
+/** Whether the pasture model and the planner start from the estimate where it's newer than PastureKey. */
+pastureApi.put("/pasture/sentinel/use", requireAdmin, (req, res) => {
+  const on = (req.body ?? {})["on"] !== false;
+  setSetting("sentinel_use", on ? "1" : "0");
+  addEvent({ ts: Date.now(), source: "pasture", kind: "action", severity: "info", message: `${req.user?.username ?? null} turned ${on ? "on" : "off"} the satellite estimate for the rotation planner`, value: null });
+  forgetPlan();
+  res.json(sentinelStatus());
+});
+
+// New passes arrive from a background check, not a request: rework the plan then.
+onEstimatesChanged(() => forgetPlan());
+
 /* A parsed report waits here between preview and commit; it is small. */
 const pending = new Map<string, { report: CiboUpload | ForageUpload | LtccUpload; filename: string; at: number }>();
 const PENDING_MS = 30 * 60_000;
@@ -322,7 +366,7 @@ function planInputs() {
   // Feed is projected past the longest stay, so a paddock with a margin beats one that only just lasts.
   const cap = Math.max(FEED_HORIZON, rules.max_days);
   const floors = paddockFloors();
-  return { rules, groups, cap, floors, key: JSON.stringify({ groups, r: rules.residual, cap, floors, checks: checksStamp() }) };
+  return { rules, groups, cap, floors, key: JSON.stringify({ groups, r: rules.residual, cap, floors, checks: checksStamp(), sat: satelliteStamp() }) };
 }
 
 /** Each paddock's own "leave at least" kg/ha, where one is set (poorer country). */

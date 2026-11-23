@@ -109,7 +109,7 @@ function drawRotation(el, ctx, p) {
     ${p.small?.length ? `<p class="small muted">Not planned, under ${r.min_head} hd: ${p.small.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     <div class="btns"><button class="btn" id="rotFull">Full planner: other options and why…</button></div>
-    <p class="muted tiny">Most urgent first. Mobs of ${r.min_head ?? 20} hd or more. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, a feed check is recorded, Cibo readings come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
+    <p class="muted tiny">Most urgent first. Mobs of ${r.min_head ?? 20} hd or more. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, a feed check is recorded, Cibo readings or satellite estimates come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
   el.querySelectorAll("[data-pad]").forEach((b) => { b.onclick = () => ctx.select(Number(b.dataset.pad), { zoom: true }); });
   el.querySelectorAll("[data-mob]").forEach((b) => { b.onclick = () => ctx.selectMob(Number(b.dataset.mob)); });
   el.querySelector("#rotFull").onclick = () => openPlan(ctx);
@@ -156,6 +156,9 @@ function explain(ctx, p, mi, pid, back) {
   const takenBy = new Map(p.mobs.filter((x) => x !== m && x.suggested).map((x) => [x.suggested.paddock_id, x.mob]));
   const aeHa = o.area_ha ? m.ae / o.area_ha : null;
   const rd = f.reading;
+  // The reading is PastureKey's, or the app's own satellite estimate where that is newer.
+  const fromSat = rd?.source === "satellite";
+  const rdWord = fromSat ? "satellite estimate" : "Cibo reading";
   const age = rd ? ageDays(rd.date) : null;
   const diff = rd ? o.now - rd.tsdm : null;
   const mm = (n) => `${nf(n)} mm`;
@@ -178,7 +181,7 @@ function explain(ctx, p, mi, pid, back) {
           : `<b>${escapeHtml(o.name)}</b> came ${place}${["st", "nd", "rd"][place - 1] || "th"} of ${m.options.length} for this mob${takenBy.has(pid) ? `, and it's already suggested for <b>${escapeHtml(takenBy.get(pid))}</b>, a more urgent mob` : ""}.`}
           Score <b>${o.score}</b> = ${o.parts.feed} feed + ${o.parts.margin} spare feed + ${o.parts.green} green + ${o.parts.rest} rest${o.parts.walk ? ` + ${o.parts.walk} walk` : ""}${o.parts.yards ? ` + ${o.parts.yards} near the yards` : ""}.</p>
         ${m.leaving?.last ? `<p class="note">This mob is booked to leave on <b>${day(m.leaving.date)}</b>${m.leaving.note ? ` (${escapeHtml(m.leaving.note)})` : ""} from ${escapeHtml(m.leaving.yards || "the yards")}. It has to move from ${escapeHtml(m.paddocks.join(" + "))} by ${day(m.move_by)}, so this paddock only needs <b>${days(m.leaving.need)}</b> of feed. Spare feed doesn't count, and being close to the yards counts most: next to them adds 20, two gates away 12, three 6.</p>` : ""}
-        ${o.confidence < 100 ? `<p class="note warn">The ${f.check ? "feed check" : "Cibo reading"} is ${nf(o.reading_age)} days old, so the three parts that rely on the pasture model (feed, spare feed, green) are counted at <b>${o.confidence}%</b>. Rest and the walk count in full, so they carry more weight until new readings come in.</p>` : ""}
+        ${o.confidence < 100 ? `<p class="note warn">The ${f.check ? "feed check" : rdWord} is ${nf(o.reading_age)} days old, so the three parts that rely on the pasture model (feed, spare feed, green) are counted at <b>${o.confidence}%</b>. Rest and the walk count in full, so they carry more weight until new readings come in.</p>` : ""}
         ${(() => { const ties = m.options.filter((x) => x.paddock_id !== pid && x.score === o.score).length;
           return ties ? `<p class="note warn">Tied on ${o.score} with ${ties} other paddock${ties === 1 ? "" : "s"}: they score the same on every count, so the planner can't tell them apart and the pick between them is arbitrary. Treat them as equally good.</p>` : ""; })()}
 
@@ -196,19 +199,20 @@ function explain(ctx, p, mi, pid, back) {
 
         ${f.check ? `<h3>Pasture: your feed check</h3>
           <p>${f.check.rating ? `<b>${RATING_WORDS[f.check.rating]}</b>, taken as` : "Estimated at"} <b>${nf(f.check.kg_ha)} kg/ha</b> on <b>${fmtDay(f.check.date)}</b>${f.check.by ? ` by ${escapeHtml(f.check.by)}` : ""}${f.check.note ? ` (${escapeHtml(f.check.note)})` : ""}.
-            It's newer than the Cibo reading below, so the model starts from it and grows and grazes it on from that day, giving ${nf(o.now)} kg/ha today.</p>` : ""}
-        <h3>Pasture: Cibo PastureKey</h3>
-        ${rd ? `<p>Last reading <b>${fmtDay(rd.date)}</b>: ${nf(rd.tsdm)} kg/ha${rd.green != null ? ` (${nf(rd.green)} green)` : ""}, ${nf(age)} days ago.
+            It takes over from the ${rdWord} below, so the model starts from it and grows and grazes it on from that day, giving ${nf(o.now)} kg/ha today.</p>` : ""}
+        <h3>Pasture: ${fromSat ? "satellite estimate" : "Cibo PastureKey"}</h3>
+        ${fromSat ? '<p class="small muted">The app\'s own estimate from the free Sentinel-2 satellite, fitted to this property\'s past PastureKey readings. It carries on where PastureKey stops, and is an estimate of what PastureKey would say, not a measurement.</p>' : ""}
+        ${rd ? `<p>Last ${fromSat ? "estimate" : "reading"} <b>${fmtDay(rd.date)}</b>: ${nf(rd.tsdm)} kg/ha${rd.green != null ? ` (${nf(rd.green)} green)` : ""}, ${nf(age)} days ago.
           ${f.check ? "Your feed check above takes over from it." : `Since then the model has grown and grazed it day by day with the actual rain and weather, giving ${nf(o.now)} kg/ha today (${diff >= 0 ? "+" : "−"}${nf(Math.abs(diff))}).`}</p>
-          ${age > 21 && !f.check ? `<p class="note warn">That reading is ${nf(age)} days old, so today's figure leans on the model more than usual. New PastureKey readings would firm it up.</p>` : ""}`
-          : '<p class="muted">No PastureKey reading for this paddock.</p>'}
+          ${age > 21 && !f.check ? `<p class="note warn">That reading is ${nf(age)} days old, so today's figure leans on the model more than usual. ${fromSat ? "The next clear satellite pass" : "New PastureKey readings"} would firm it up.</p>` : ""}`
+          : '<p class="muted">No pasture reading for this paddock.</p>'}
         ${o.planting ? `<p class="small">Planted on ${fmtDay(o.planting.sown_on)} to ${(o.planting.crops || [{ crop: o.planting.crop, rate_kg_ha: o.planting.rate_kg_ha }]).map((c) => `<b>${escapeHtml(c.crop)}</b>${c.rate_kg_ha != null ? ` at ${c.rate_kg_ha} kg/ha` : ""}`).join(" + ")}${o.planting.fertiliser ? `, ${escapeHtml(o.planting.fertiliser)}` : ""}; ready to graze from ${fmtDay(o.planting.ready_on)}${o.planting.ready_guessed ? " (taken as 8 weeks after planting)" : ""}.</p>` : ""}
         <p><b>Green (${o.parts.green}):</b> ${o.green_share != null ? `${nf(o.green_share)}% of the feed is green today` : "green share unknown"}. Green feed is better quality, so it adds up to 15 points.</p>
         ${f.multiplier != null ? `<p class="small muted">This paddock grows about ${f.multiplier.toFixed(2)}× the district average, fitted from its past Cibo readings (soil, land condition, cultivation).</p>` : ""}
 
         <h3>Rain and soil water: SILO (Long Paddock)</h3>
         <ul class="small">
-          ${rd && f.rain_since_reading != null ? `<li>${mm(f.rain_since_reading)} since the Cibo reading on ${fmtDay(rd.date)}.</li>` : ""}
+          ${rd && f.rain_since_reading != null ? `<li>${mm(f.rain_since_reading)} since the ${rdWord} on ${fmtDay(rd.date)}.</li>` : ""}
           <li>${rain30}</li>
           <li>Soil water now: <b>${nf(f.soil_water_pct)}% full</b>. Growth starts from this.</li>
           ${f.rain_ahead ? `<li>The next ${f.rain_ahead.days} days, in past seasons from this date: ${mm(f.rain_ahead.median)} in a typical one, ${mm(f.rain_ahead.low)} in a drier one. The days of feed above come from running all ${p.seasons || "the"} past seasons forward.</li>` : ""}
@@ -265,7 +269,7 @@ export async function openPlan(ctx) {
   const r = p.rules;
   const optRow = (o, chosen, mi) => `<tr${chosen ? ' class="chosen"' : ""}>
     <td><button class="linkbtn${chosen ? " strong" : ""}" data-why="${mi}:${o.paddock_id}" title="How this was worked out">${escapeHtml(o.name)}</button>${o.gates_away ? ` <span class="chip" title="Gates to walk through from where it is now">${walkText(o.gates_away)}</span>` : ""}
-      <div class="muted tiny">${nf(o.area_ha)} ha · ${o.checked ? `feed check ${escapeHtml(o.checked)}` : `reading ${o.reading ? escapeHtml(o.reading) : "—"}`}</div></td>
+      <div class="muted tiny">${nf(o.area_ha)} ha · ${o.checked ? `feed check ${escapeHtml(o.checked)}` : `${o.facts?.reading?.source === "satellite" ? "satellite" : "reading"} ${o.reading ? escapeHtml(o.reading) : "—"}`}</div></td>
     <td class="num">${nf(o.now)}</td>
     <td class="num"><b>${feedDays(o)}</b>${o.days.low < o.days.median ? ` <span class="muted tiny">(dry ${o.days.low >= FEED_HORIZON ? `${FEED_HORIZON}+` : o.days.low})</span>` : ""}</td>
     <td class="num">${o.rest_days === null ? '<span class="muted">—</span>' : o.rest_days}${o.rest_days !== null && o.rest_weight < 1 ? `<div class="muted tiny" title="Poorer country: its pasture grows back more slowly, so a rest here counts for less">counts as ${o.rest_counts}</div>` : ""}</td></tr>`;
