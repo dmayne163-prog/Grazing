@@ -22,12 +22,13 @@ import { restWeights } from "./capacity.js";
 import { DEFAULT_READY_DAYS, latestPlantings } from "./plantings.js";
 
 /** min_head: smaller mobs (a few cows, a sick heifer) are left out of the plan. */
-export interface PlanRules { residual: number; min_days: number; max_days: number; min_head: number }
+/** min_rest: the shortest rest before any mob (the same or another) goes back into a paddock, days. */
+export interface PlanRules { residual: number; min_days: number; max_days: number; min_head: number; min_rest: number }
 
 export function planRules(): PlanRules {
   const s = getSetting("plan_rules");
   const r = s ? (JSON.parse(s) as Partial<PlanRules>) : {};
-  return { residual: r.residual ?? 1200, min_days: r.min_days ?? 7, max_days: r.max_days ?? 42, min_head: r.min_head ?? 20 };
+  return { residual: r.residual ?? 1200, min_days: r.min_days ?? 7, max_days: r.max_days ?? 42, min_head: r.min_head ?? 20, min_rest: r.min_rest ?? 42 };
 }
 
 export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): PlanRules {
@@ -43,6 +44,7 @@ export function setPlanRules(input: Partial<Record<keyof PlanRules, unknown>>): 
     min_days: num(input.min_days, 1, 60, "The shortest stay") ?? cur.min_days,
     max_days: num(input.max_days, 7, 180, "The longest stay") ?? cur.max_days,
     min_head: num(input.min_head, 1, 1000, "The smallest mob planned") ?? cur.min_head,
+    min_rest: num(input.min_rest, 0, 365, "The shortest rest") ?? cur.min_rest,
   };
   if (next.min_days > next.max_days) throw new StockError("The shortest stay can't be longer than the longest");
   setSetting("plan_rules", JSON.stringify(next));
@@ -269,6 +271,19 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
     .map((id) => ({ paddock_id: id, name: nameOf(id), ...plantingOf(id)! }))
     .sort((a, b) => a.ready_on.localeCompare(b.ready_on));
   const yardsKm = (id: number, yardsId: number) => { const d = yardsInfo(yardsId).gap.get(id); return d === undefined ? null : Math.round(d / 100) / 10; };
+  // A paddock in a mob's rotation group is kept for that mob: others aren't sent there.
+  const keptFor = new Map<number, Set<string>>();
+  for (const g of all) for (const v of g.views) for (const id of mobRotation(v.mob)?.paddock_ids ?? []) {
+    const s = keptFor.get(id) ?? new Set<string>();
+    s.add(g.key);
+    keptFor.set(id, s);
+  }
+  const keptForOther = (id: number, key: string) => { const s = keptFor.get(id); return !!s && !s.has(key); };
+  const keptName = (id: number) => {
+    const s = keptFor.get(id);
+    const g = s ? all.find((x) => s.has(x.key)) : null;
+    return g ? g.views.map((v) => v.mob.name).join(" + ") : null;
+  };
 
   const mobs = groups.map((g) => {
     const key = g.key;
@@ -377,6 +392,9 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
           parts, rest_known: rest !== null, gates_away: gatesAway, green_share: greenShare === null ? null : r1(greenShare * 100),
           confidence: Math.round(confidence * 100), reading_age: age, yards_hops: yardsHops, yards_km: yardsFar, yards_access: access.get(o.paddock_id) ?? null,
           planting: plantingOf(o.paddock_id),
+          // Rest by the day it would go in: rest so far plus the days until the move.
+          rest_at_entry: rest === null ? null : rest + Math.max(0, moveIn),
+          kept_for: keptForOther(o.paddock_id, key) ? keptName(o.paddock_id) : null,
           facts: {
             reading: p.reading, check: p.check, now_green: p.now_green, multiplier: p.multiplier, rain_since_reading: p.rain_since_reading,
             rain_30: p.rain_30, rain_30_median: p.rain_30_median, soil_water_pct: p.soil_water_pct, rain_ahead: p.rain_ahead,
@@ -386,10 +404,27 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       .sort((a, b) => b.score - a.score);
     // Kept to its rotation, unless it's leaving (the last paddock is about the
     // yards) or none of its paddocks will do: then the best of the rest, flagged.
+    // The shortest rest: not back in before it's rested min_rest days (unknown rest counts as rested).
+    // If nothing has, the best of the rest, flagged, rather than no suggestion.
+    let pool = options;
+    let restShort = false;
+    if (rules.min_rest > 0) {
+      const rested = pool.filter((o) => o.rest_at_entry === null || o.rest_at_entry >= rules.min_rest);
+      if (rested.length) pool = rested;
+      else if (pool.length) { restShort = true; notes.push(`no paddock with enough feed will have rested ${rules.min_rest} days by then, so these haven't`); }
+    }
+    // Another mob's rotation paddocks are left for it.
+    if (!rotSet.size) {
+      const free = pool.filter((o) => !o.kept_for);
+      if (free.length) pool = free;
+      else if (pool.length) notes.push("every paddock with feed is in another mob's rotation, so these are");
+    } else {
+      pool = pool.filter((o) => rotSet.has(o.paddock_id) || !o.kept_for);
+    }
     let rotOutside = false;
-    let chosen = options;
+    let chosen = pool;
     if (rotSet.size && !leaving?.last) {
-      const inGroup = options.filter((o) => rotSet.has(o.paddock_id));
+      const inGroup = pool.filter((o) => rotSet.has(o.paddock_id));
       if (inGroup.length) chosen = inGroup;
       else { rotOutside = true; notes.push("none of its rotation paddocks is free with enough feed, so these are from outside it"); }
     }
@@ -405,7 +440,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       now: cur?.now ?? null, days_left: left,
       move_by: addDays(now, leaving?.stays ? leaving.days : moveIn), move_in: leaving?.stays ? leaving.days : moveIn, why, notes, leaving,
       suggested: null as null | (typeof options)[number], options: leaving?.stays ? [] : chosen.slice(0, 6),
-      rotation, all_options: proj.options[key] ?? [], leave_on: leaving?.date ?? null,
+      rotation, rest_short: restShort, all_options: proj.options[key] ?? [], leave_on: leaving?.date ?? null,
       pattern: [] as Array<{ paddock_id: number; name: string; from: string; to: string }>,
       /** Set when its rotation runs out of paddocks with enough feed: the day it would need one. */
       short_from: null as string | null,
@@ -425,7 +460,11 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
   // at a time; rest counts from now to the day it would go in.
   const busy = new Map<number, Array<[string, string]>>();
   const book = (id: number, a: string, b: string) => { const l = busy.get(id) ?? []; l.push([a, b]); busy.set(id, l); };
-  const free = (id: number, a: string, b: string) => !(busy.get(id) ?? []).some(([x, y]) => a < y && x < b);
+  // Free from a to b, and rested min_rest days since anyone was last in it.
+  const free = (id: number, a: string, b: string) => {
+    const restFrom = addDays(a, -rules.min_rest);
+    return !(busy.get(id) ?? []).some(([x, y]) => x < b && y > restFrom);
+  };
   for (const m of mobs) for (const id of m.paddock_ids) book(id, now, m.move_by);
   const stayOf = (d: { median: number }) => Math.max(rules.min_days, Math.min(d.median, rules.max_days));
   for (const m of mobs) {
@@ -446,7 +485,7 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
       const rot = new Set(m.rotation?.paddock_ids ?? []);
       const used = new Set([...m.paddock_ids, ...m.pattern.map((s) => s.paddock_id)]);
       const pick = (allowUsed: boolean) => m.all_options
-        .filter((c) => !skip.has(c.paddock_id) && (!rot.size || rot.has(c.paddock_id)) && (allowUsed || !used.has(c.paddock_id))
+        .filter((c) => !skip.has(c.paddock_id) && (rot.size ? rot.has(c.paddock_id) : !keptForOther(c.paddock_id, m.key)) && (allowUsed || !used.has(c.paddock_id))
           && c.paddock_id !== last.paddock_id && (readyOn(c.paddock_id) ?? "") <= start && c.days.median >= rules.min_days
           && free(c.paddock_id, start, addDays(start, stayOf(c.days))))
         .map((c) => {
@@ -454,11 +493,13 @@ export function makePlan(proj: PlanProjection, rules: PlanRules) {
           // A paddock used earlier in this pattern has only rested since it was left.
           const leftAt = m.pattern.filter((s) => s.paddock_id === c.paddock_id).at(-1)?.to;
           const rested = leftAt ? daysBetween(leftAt, start) : (h ? (h.occupied ? 0 : h.rest_days ?? SCORE.restUnknown) : SCORE.restUnknown) + daysBetween(now, start);
+          if (rested < rules.min_rest) return null;
           const gates = hops([last.paddock_id], c.paddock_id);
           const score = (Math.min(c.days.median, rules.max_days) + Math.min(c.days.low, rules.max_days)) / 2
             + Math.min(rested, SCORE.restCap) / 10 + (gates === null ? 0 : SCORE.walk[gates] ?? 0);
           return { c, score };
         })
+        .filter((x): x is NonNullable<typeof x> => x !== null)
         .sort((a, b) => b.score - a.score)[0];
       const best = pick(false) ?? (rot.size ? pick(true) : undefined);
       if (!best) { if (rot.size) m.short_from = start; continue; }

@@ -752,3 +752,10 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .movepair .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
 .movepair figure { margin: 0; }
 .movepair img { display: block; width: 100%; height: auto; border-radius: 4px; }
+
+/* Rotation plan layer: water points and gates fade back; one mob's stops labelled; legend clicks. */
+.planon .leaflet-points-pane { opacity: 0.35; }
+.plstoplabel { font-weight: 600; font-size: 12px; padding: 2px 6px; }
+.planlegend li.dim { opacity: 0.45; }
+.planlegend .plfocus { display: inline-flex; align-items: center; gap: 6px; text-align: left; }
+.planlegend .plfocus.on b { text-decoration: underline; }

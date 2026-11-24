@@ -15,7 +15,7 @@ import { conditionText, loadText } from "./capacity.js";
 import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
 import { forgetRotation, getPlan, openPlan, renderRotation } from "./plan.js";
-import { PlanLayer, colourOf, planMobs } from "./planlayer.js";
+import { PlanLayer, colourOf, planMobs, shortName } from "./planlayer.js";
 import { loadNotes, notesSectionHtml } from "./notes.js";
 import { loadPlantings, plantingsSectionHtml } from "./plantings.js";
 import { feedCheckSectionHtml, loadFeedChecks } from "./feedcheck.js";
@@ -785,13 +785,15 @@ function bindOverview() {
   body.querySelectorAll("[data-layer]").forEach((cb) => {
     cb.onchange = () => farm.setKindVisible(cb.dataset.layer, cb.checked);
   });
+  const planLg = $("#planLegend", body);
+  if (planLg) bindPlanLegend(planLg);
   const planToggle = $("[data-planlayer]", body);
   if (planToggle) planToggle.onchange = async () => {
     localSet("planLayer", planToggle.checked ? "1" : "0");
     planLayer.setVisible(planToggle.checked);
     if (planToggle.checked) await drawPlanLayer();
     const lg = $("#planLegend");
-    if (lg) { lg.innerHTML = planLegendHtml(); paintSwatches(lg); }
+    if (lg) { lg.innerHTML = planLegendHtml(); paintSwatches(lg); bindPlanLegend(lg); }
   };
   const mgmtToggle = $("[data-mgmt]", body);
   if (mgmtToggle) mgmtToggle.onchange = () => {
@@ -905,13 +907,29 @@ async function drawPlanLayer() {
     toast(`The rotation plan couldn't be shown: ${e.message}`, { error: true });
   }
 }
-/** Which colour is which mob, under the layer's tick box. */
+/** Which colour is which mob, under the layer's tick box. Click a mob to show only it. */
 function planLegendHtml() {
   if (localGet("planLayer") !== "1" || !shownPlan?.ok) return "";
+  const focus = planLayer?.focus ?? null;
   return `<ul class="planlegend small">${planMobs(shownPlan).map((m, i) => `
-    <li><span class="swatch" data-colour="${colourOf(i)}"></span><b>${escapeHtml(m.mob)}</b> <span class="muted">${m.head} hd${m.rotation ? ` · rotates around ${m.rotation.names.map(escapeHtml).join(", ")}` : " · no rotation set: any paddock"}</span></li>`).join("")}
+    <li${focus && focus !== m.key ? ' class="dim"' : ""}><button class="linkbtn plfocus${focus === m.key ? " on" : ""}" data-planfocus="${escapeHtml(m.key)}" title="${escapeHtml(m.mob)}"><span class="swatch" data-colour="${colourOf(i)}"></span><b>${escapeHtml(shortName(m))}</b></button>
+      <span class="muted">${m.head} hd · in ${escapeHtml(m.paddocks.join(" + "))}${m.rotation ? ` · rotates around ${m.rotation.names.map(escapeHtml).join(", ")}` : ""}</span></li>`).join("")}
   </ul>
-  <p class="muted tiny">Filled: the paddocks each mob rotates around (lighter where none is set). The line runs from where it is now through its next paddocks in order: solid for the next move, dashed after that, which is rougher. Hover a number for the dates.</p>`;
+  ${focus ? '<div class="btns"><button class="btn" data-planfocus="">Show all mobs</button></div>' : ""}
+  <p class="muted tiny">Click a mob to show only its plan, with each stop's paddock and dates. Solid fill: the paddocks a mob rotates around. Dashed outline: where a mob without a rotation group is now and its next stops. The line runs from where it is now through its next paddocks in order: solid for the next move, dashed after that, which is rougher.</p>`;
+}
+
+/** Clicking a mob in the legend shows only its plan; again (or "Show all") shows every mob. */
+function bindPlanLegend(root) {
+  root.querySelectorAll("[data-planfocus]").forEach((b) => {
+    b.onclick = () => {
+      const key = b.dataset.planfocus || null;
+      planLayer.focus = planLayer.focus === key ? null : key;
+      drawPlanLayer();
+      const lg = $("#planLegend");
+      if (lg) { lg.innerHTML = planLegendHtml(); paintSwatches(lg); bindPlanLegend(lg); }
+    };
+  });
 }
 
 /** Swatch colours are set through the CSSOM, which the CSP allows, not style attributes. */

@@ -16,6 +16,13 @@ export function planMobs(plan) {
 }
 export const colourOf = (i) => PLAN_COLOURS[i % PLAN_COLOURS.length];
 
+/** A short name for the legend: the first mob's name without its "· born …" detail, and how many more share it. */
+export function shortName(m) {
+  const parts = m.mob.split(" + ");
+  const first = parts[0].split(" · ")[0];
+  return parts.length > 1 ? `${first} + ${parts.length - 1} more` : first;
+}
+
 const day = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 
 export class PlanLayer {
@@ -27,12 +34,16 @@ export class PlanLayer {
     if (!map.getPane("planLines")) map.createPane("planLines").style.zIndex = 445;
     this.group = L.layerGroup();
     this.on = false;
+    /** The one mob shown (its key), or null for all of them. */
+    this.focus = null;
   }
 
   setVisible(on) {
     this.on = on;
     if (on) this.group.addTo(this.farm.map);
     else this.group.remove();
+    // Water points and gates fade back while the plan is showing, so the routes stand out.
+    this.farm.map.getContainer().classList.toggle("planon", on);
   }
 
   /** Draws the plan: features are the map's paddocks (for shapes and centres). */
@@ -40,15 +51,21 @@ export class PlanLayer {
     this.group.clearLayers();
     const byId = new Map(features.map((f) => [f.id, f]));
     const centre = (id) => { const f = byId.get(id); return f ? interiorPoint(f.geometry) : null; };
+    const focused = this.focus !== null && planMobs(plan).some((m) => m.key === this.focus);
     planMobs(plan).forEach((m, i) => {
+      if (focused && m.key !== this.focus) return;
       const c = colourOf(i);
+      // A mob with a rotation group: the whole group, filled. Without one: just
+      // where it is and its planned stops, outlined with a light wash.
       const group = m.rotation?.paddock_ids?.length ? m.rotation.paddock_ids : [...new Set([...m.paddock_ids, ...(m.pattern || []).map((s) => s.paddock_id)])];
       for (const id of group) {
         const f = byId.get(id);
         if (!f) continue;
         L.geoJSON(f.geometry, {
           pane: "planFill", interactive: false,
-          style: { color: c, weight: 2, opacity: 0.9, fillColor: c, fillOpacity: m.rotation ? 0.45 : 0.25 },
+          style: m.rotation
+            ? { color: c, weight: 2.5, opacity: 0.95, fillColor: c, fillOpacity: 0.4 }
+            : { color: c, weight: 2.5, opacity: 0.95, fillColor: c, fillOpacity: 0.12, dashArray: "6 4" },
         }).addTo(this.group);
       }
       // The route: where it is now, then each planned paddock in turn.
@@ -64,7 +81,11 @@ export class PlanLayer {
           pane: "planLines",
           icon: L.divIcon({ className: `plstop pl-c${i % PLAN_COLOURS.length}`, html: `${k + 1}`, iconSize: [20, 20] }),
           keyboard: false,
-        }).bindTooltip(`<b>${escapeHtml(m.mob)}</b><br>${k + 1}. ${escapeHtml(s.name)}: ${day(s.from)} – ${day(s.to)}`, { direction: "top" })
+        }).bindTooltip(focused
+          // One mob shown: every stop labelled with its paddock and dates.
+          ? `${k + 1}. ${escapeHtml(s.name)} · ${day(s.from)}–${day(s.to)}`
+          : `<b>${escapeHtml(shortName(m))}</b><br>${k + 1}. ${escapeHtml(s.name)}: ${day(s.from)} – ${day(s.to)}`,
+          focused ? { permanent: true, direction: "right", offset: [10, 0], className: "plstoplabel" } : { direction: "top" })
           .addTo(this.group);
       });
     });

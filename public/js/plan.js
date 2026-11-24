@@ -109,7 +109,7 @@ function drawRotation(el, ctx, p) {
     ${p.small?.length ? `<p class="small muted">Not planned, under ${r.min_head} hd: ${p.small.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     ${p.unplanned?.length ? `<p class="small muted">Not planned (in a holding area, not a paddock): ${p.unplanned.map((u) => `${escapeHtml(u.mob)} (${u.head} hd, ${escapeHtml(u.where)})`).join("; ")}.</p>` : ""}
     <div class="btns"><button class="btn" id="rotFull">Full planner: other options and why…</button></div>
-    <p class="muted tiny">Most urgent first. Mobs of ${r.min_head ?? 20} hd or more. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, a feed check is recorded, Cibo readings or satellite estimates come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
+    <p class="muted tiny">Most urgent first. Mobs of ${r.min_head ?? 20} hd or more. Leave ${nf(r.residual)} kg/ha (or a paddock's own floor, set in its Details), stay ${r.min_days}–${r.max_days} days, rest at least ${r.min_rest ?? 42} days before going back in, and another mob's rotation paddocks are left for it (change these in the full planner). Weather to ${escapeHtml(p.as_of)}.${p.worked_out ? ` Worked out ${workedOut(p.worked_out)}, and again when cattle are moved, a feed check is recorded, Cibo readings or satellite estimates come in, or once a week.` : ""} Suggestions only: move cattle from the mob's page or by dragging its icon on the map.</p>`;
   el.querySelectorAll("[data-pad]").forEach((b) => { b.onclick = () => ctx.select(Number(b.dataset.pad), { zoom: true }); });
   el.querySelectorAll("[data-mob]").forEach((b) => { b.onclick = () => ctx.selectMob(Number(b.dataset.mob)); });
   el.querySelector("#rotFull").onclick = () => openPlan(ctx);
@@ -223,7 +223,8 @@ function explain(ctx, p, mi, pid, back) {
         <p>${o.rest_days === null ? "No grazing recorded here since records began, so it's counted as a 60-day rest."
           : `Last grazed <b>${nf(o.rest_days)} days ago</b>.`}
           ${o.rest_days !== null && o.rest_weight < 1 ? ` This is poorer country (FORAGE carrying capacity), where pasture grows back more slowly, so the rest counts as ${nf(o.rest_counts)} days.` : ""}
-          <b>Rest (${o.parts.rest}):</b> a tenth of the days rested, up to 12 points at 120 days.</p>
+          <b>Rest (${o.parts.rest}):</b> a tenth of the days rested, up to 12 points at 120 days.
+          ${o.rest_at_entry != null ? ` By the day it would go in it will have rested <b>${nf(o.rest_at_entry)} days</b>${o.rest_at_entry < (r.min_rest ?? 42) ? `, <span class="warnc">short of the ${r.min_rest ?? 42}-day minimum: offered only because nothing else with feed had rested long enough</span>` : ""}.` : ""}</p>
 
         <h3>Where it is</h3>
         <p><b>Walk (${o.parts.walk}):</b> ${o.gates_away ? `${o.gates_away === 1 ? "through one gate" : `through ${o.gates_away} gates`} from ${escapeHtml(m.paddocks.join(" + "))}` : `more than three gates from ${escapeHtml(m.paddocks.join(" + "))}, or no gate route mapped`}. One gate adds 5, two add 3, three add 1.5.</p>
@@ -234,7 +235,7 @@ function explain(ctx, p, mi, pid, back) {
             <td><button class="linkbtn${x.paddock_id === pid ? " strong" : ""}" data-why="${mi}:${x.paddock_id}">${escapeHtml(x.name)}</button>${m.suggested?.paddock_id === x.paddock_id ? ' <span class="chip">suggested</span>' : takenBy.has(x.paddock_id) ? `<div class="muted tiny">given to ${escapeHtml(takenBy.get(x.paddock_id))}</div>` : ""}</td>
             <td class="num">${x.parts.feed}</td><td class="num">${x.parts.margin}</td><td class="num">${x.parts.green}</td><td class="num">${x.parts.rest}</td><td class="num">${x.parts.walk || ""}</td>${m.leaving?.last ? `<td class="num">${x.parts.yards || ""}</td>` : ""}<td class="num"><b>${x.score}</b></td></tr>`).join("")}
         </tbody></table>
-        <p class="muted tiny">Only empty paddocks with at least ${r.min_days} days of feed are offered, and not a crop that won't be ready to graze by ${day(m.move_by)}; the top six are shown.</p>
+        <p class="muted tiny">Only empty paddocks with at least ${r.min_days} days of feed are offered, that will have rested at least ${r.min_rest ?? 42} days, aren't in another mob's rotation, and not a crop that won't be ready to graze by ${day(m.move_by)}; the top six are shown.</p>
       </div>
       <footer class="btns">
         ${back ? '<button class="btn" id="whyBack">← Back to the planner</button>' : ""}
@@ -278,7 +279,7 @@ export async function openPlan(ctx) {
     <div class="dlg wide report">
       <header>
         <h2>Rotation planner</h2>
-        <div class="muted small">Weather to ${escapeHtml(p.as_of)}. Leave at least <b>${nf(r.residual)} kg/ha</b>; stay <b>${r.min_days}–${r.max_days} days</b> in a paddock; mobs of <b>${r.min_head ?? 20} hd</b> or more.
+        <div class="muted small">Weather to ${escapeHtml(p.as_of)}. Leave at least <b>${nf(r.residual)} kg/ha</b>; stay <b>${r.min_days}–${r.max_days} days</b> in a paddock; rest at least <b>${r.min_rest ?? 42} days</b> before going back in; mobs of <b>${r.min_head ?? 20} hd</b> or more.
           ${ctx.canEdit ? '<button class="linkbtn" id="plRules">Change</button>' : ""}</div>
       </header>
       <div class="body">
@@ -290,6 +291,10 @@ export async function openPlan(ctx) {
           <div class="row2">
             <div class="f"><label for="plMax">Longest stay, days</label><input id="plMax" type="number" value="${r.max_days}"></div>
             <div class="f"><label for="plHead">Smallest mob planned, head</label><input id="plHead" type="number" min="1" value="${r.min_head ?? 20}"></div>
+          </div>
+          <div class="row2">
+            <div class="f"><label for="plRest">Shortest rest before going back in, days</label><input id="plRest" type="number" min="0" max="365" value="${r.min_rest ?? 42}"></div>
+            <div></div>
           </div>
           <div class="btns"><button class="btn primary" id="plSave">Save and replan</button></div>
         </div>
@@ -322,7 +327,7 @@ export async function openPlan(ctx) {
   const sv = d.querySelector("#plSave");
   if (sv) sv.onclick = async () => {
     try {
-      await send("PUT", "/api/plan/rules", { residual: d.querySelector("#plRes").value, min_days: d.querySelector("#plMin").value, max_days: d.querySelector("#plMax").value, min_head: d.querySelector("#plHead").value });
+      await send("PUT", "/api/plan/rules", { residual: d.querySelector("#plRes").value, min_days: d.querySelector("#plMin").value, max_days: d.querySelector("#plMax").value, min_head: d.querySelector("#plHead").value, min_rest: d.querySelector("#plRest").value });
       forgetRotation();
       openPlan(ctx);
     } catch (e) {
