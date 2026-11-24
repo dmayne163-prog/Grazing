@@ -614,10 +614,13 @@ CREATE TABLE IF NOT EXISTS settings (
   if (!cameraCols.includes("preset")) db.exec("ALTER TABLE cameras ADD COLUMN preset INTEGER");
   // The box of open grass the greenness is read from: JSON [left, top, right, bottom], fractions of the picture.
   if (!cameraCols.includes("roi")) db.exec("ALTER TABLE cameras ADD COLUMN roi TEXT");
+  // The day a fixed camera was last moved or re-aimed: pictures before it are kept but not scored.
+  if (!cameraCols.includes("moved_on")) db.exec("ALTER TABLE cameras ADD COLUMN moved_on TEXT");
   // Each picture's greenness (green share of the light in that box), and the box it was read from.
   const shotCols = (db.pragma("table_info(camera_shots)") as Array<{ name: string }>).map((c) => c.name);
   // from_recording: 1 for a picture taken afterwards from the NVR's recordings (filling in past days).
-  for (const [col, type] of [["gcc", "REAL"], ["gcc_ok", "INTEGER"], ["gcc_why", "TEXT"], ["gcc_roi", "TEXT"], ["from_recording", "INTEGER"]] as const) {
+  // sig: a small edge thumbnail of the whole picture, for spotting the day a camera was moved.
+  for (const [col, type] of [["gcc", "REAL"], ["gcc_ok", "INTEGER"], ["gcc_why", "TEXT"], ["gcc_roi", "TEXT"], ["from_recording", "INTEGER"], ["sig", "BLOB"]] as const) {
     if (!shotCols.includes(col)) db.exec(`ALTER TABLE camera_shots ADD COLUMN ${col} ${type}`);
   }
 }

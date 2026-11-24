@@ -18,6 +18,11 @@ export async function loadCameras(ctx, f, root) {
   if (!el) return;
   let data;
   try { data = await get(`/api/cameras?paddock=${f.id}`); } catch { return; }
+  // Pictures from before a camera was last moved are kept, but not scored.
+  for (const s of data.shots) {
+    const cam = data.cameras.find((x) => x.id === s.camera_id);
+    s.before_move = !!(cam?.moved_on && s.taken_on < cam.moved_on);
+  }
   if (!el.isConnected) return;
   // Hidden on paddocks without a camera, unless an administrator could add one.
   if (!data.cameras.length && !(ctx.canEdit && data.on)) return;
@@ -51,6 +56,9 @@ export async function loadCameras(ctx, f, root) {
       Greenness is the share of the light that's green in the grass box (outlined): it rises as the grass greens up and falls as it dries off or is eaten down.
       Compare it only with the same camera's other days; a picture taken at night, in fog or glare isn't scored.</p>`;
 
+  el.querySelectorAll("[data-cam-moved]").forEach((b) => {
+    b.onclick = () => movesDialog(ctx, data.cameras.find((x) => x.id === Number(b.dataset.camMoved)), reload);
+  });
   el.querySelectorAll("[data-cam-hist]").forEach((b) => {
     b.onclick = () => historyDialog(ctx, data.cameras.find((x) => x.id === Number(b.dataset.camHist)), reload);
   });
@@ -147,7 +155,7 @@ function cameraDialog(ctx, featureId, padName, cam, after) {
 /* ------------------------------- greenness -------------------------------- */
 
 const g100 = (v) => (v * 100).toFixed(1);
-const scored = (shots) => shots.filter((s) => s.gcc != null && s.gcc_ok);
+const scored = (shots) => shots.filter((s) => s.gcc != null && s.gcc_ok && !s.before_move);
 const timeOf = (ms) => new Date(ms).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" });
 const whenText = (s) => `${day(s.taken_on)}${s.from_recording ? `, from a recording at ${timeOf(s.taken_at)}` : ""}`;
 
@@ -169,13 +177,15 @@ function greenHtml(c, shots, ctx) {
   return `<div class="greenline">
     <div class="small" data-green-text>${greenText(shots, 0)}</div>
     ${ok.length >= 2 ? chartSvg(ok) : ""}
-    ${ctx.canEdit ? `<button class="linkbtn tiny" data-cam-roi="${c.id}">Move the grass area…</button>` : ""}
+    ${c.moved_on ? `<div class="muted tiny">Scored from ${day(c.moved_on)}, when the camera was last moved.</div>` : ""}
+    ${ctx.canEdit ? `<button class="linkbtn tiny" data-cam-roi="${c.id}">Move the grass area…</button>${c.preset == null ? ` · <button class="linkbtn tiny" data-cam-moved="${c.id}">Camera moved?…</button>` : ""}` : ""}
   </div>`;
 }
 
 function greenText(shots, i) {
   const s = shots[i];
   if (!s) return "";
+  if (s.before_move) return '<span class="muted">Not scored: from before the camera was last moved.</span>';
   if (s.gcc == null) return '<span class="muted">Greenness: being worked out…</span>';
   if (!s.gcc_ok) return `<span class="muted">Not scored: ${s.gcc_why || "the picture can't be trusted"}.</span>`;
   const t = Date.parse(`${s.taken_on}T00:00:00`);
@@ -347,4 +357,54 @@ async function historyDialog(ctx, cam, after) {
       after?.();
     } catch (e) { ctx.toast(e.message, { error: true }); }
   };
+}
+
+/* ------------------------------- camera moves ------------------------------- */
+
+/** The days the camera's view seems to have changed, each with the pictures either side; pick the day scoring starts from. */
+async function movesDialog(ctx, cam, after) {
+  const d = ctx.dialog;
+  d.innerHTML = '<div class="dlg wide"><div class="body"><p class="muted">Looking back through the pictures for days the camera was moved…</p></div></div>';
+  d.showModal();
+  let r;
+  try { r = await get(`/api/cameras/${cam.id}/moves`); }
+  catch (e) { d.querySelector(".body").innerHTML = `<div class="note err">${escapeHtml(e.message)}</div>`; return; }
+  const save = async (value) => {
+    try {
+      await send("PATCH", `/api/cameras/${cam.id}`, { moved_on: value });
+      d.close();
+      ctx.toast(value ? `${cam.name} scored from ${day(value)}` : `${cam.name} scored on every day`);
+      after?.();
+    } catch (e) { ctx.toast(e.message, { error: true }); }
+  };
+  const moves = [...r.moves].reverse(); // newest first
+  d.innerHTML = `
+    <div class="dlg wide">
+      <header><h2>Was ${escapeHtml(cam.name)} moved?</h2></header>
+      <div class="body">
+        <p class="small">If the camera's been moved, bumped or re-aimed, the grass area lands somewhere else in the older pictures and their scores mean nothing. Pick the day the current view starts: older pictures stay to look through, but aren't scored or charted.</p>
+        ${r.waiting ? `<p class="note warn small">${r.waiting} picture${r.waiting === 1 ? " is" : "s are"} still being checked: look again in a few minutes for the full list.</p>` : ""}
+        ${moves.length ? `<p class="small">The view seems to have changed on these days (the fences, trees and horizon shift). Compare the pictures either side:</p>
+          ${moves.map((m) => `<div class="movepair">
+            <div class="small"><b>${day(m.date)}</b> <span class="muted">· ${m.strength >= 0.7 ? "clear change" : "likely change"}</span>
+              <button class="btn${moves[0] === m ? " primary" : ""}" data-from="${m.date}">Score from this day</button></div>
+            <div class="pair"><figure><img src="/api/camera-shots/${m.before}.jpg" alt="Before" loading="lazy"><figcaption class="tiny muted">Before</figcaption></figure>
+              <figure><img src="/api/camera-shots/${m.after}.jpg" alt="After" loading="lazy"><figcaption class="tiny muted">After</figcaption></figure></div>
+          </div>`).join("")}`
+          : `<p class="small">No clear camera move found in its ${r.waiting ? "checked " : ""}pictures.</p>`}
+        <div class="row2">
+          <div class="f"><label for="mvDay">Or pick the day yourself</label><input id="mvDay" type="date" value="${escapeHtml(cam.moved_on || "")}"></div>
+          <div class="f"><label>&nbsp;</label><button class="btn" id="mvSet">Score from that day</button></div>
+        </div>
+        <p class="muted tiny">${cam.moved_on ? `Now: scored from ${day(cam.moved_on)}.` : "Now: every day is scored."}</p>
+      </div>
+      <footer class="btns">
+        ${cam.moved_on ? '<button class="btn" id="mvClear">Score every day</button>' : ""}
+        <button class="btn" id="mvClose">Close</button>
+      </footer>
+    </div>`;
+  d.querySelectorAll("[data-from]").forEach((b) => { b.onclick = () => save(b.dataset.from); });
+  d.querySelector("#mvSet").onclick = () => { const v = d.querySelector("#mvDay").value; if (v) save(v); else ctx.toast("Pick a day", { error: true }); };
+  d.querySelector("#mvClear")?.addEventListener("click", () => save(null));
+  d.querySelector("#mvClose").onclick = () => d.close();
 }

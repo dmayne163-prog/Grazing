@@ -745,3 +745,10 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .greenchart .gp { fill: #4caf50; }
 .greenchart .gp.on { fill: #ffd400; stroke: #000; stroke-width: 1; r: 4; }
 .greenchart .gt { font-size: 9px; fill: currentColor; opacity: 0.6; }
+
+/* Camera moves: the pictures either side of a change, side by side. */
+.movepair { border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25)); padding: 8px 0; }
+.movepair .btn { margin-left: 8px; }
+.movepair .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.movepair figure { margin: 0; }
+.movepair img { display: block; width: 100%; height: auto; border-radius: 4px; }

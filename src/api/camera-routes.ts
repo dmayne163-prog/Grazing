@@ -5,7 +5,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { addEvent, db } from "../db/database.js";
 import { logger } from "../logger.js";
 import {
-  addCamera, CAMERA_DIR, CameraError, camerasOn, getCamera, getShot, historyRun, listCameras, listShots, oldestRecording, removeCamera, startHistory, takeShot, updateCamera,
+  addCamera, CAMERA_DIR, CameraError, cameraMoves, camerasOn, getCamera, getShot, historyRun, listCameras, listShots, oldestRecording, removeCamera, startHistory, takeShot, updateCamera,
 } from "../cameras/cameras.js";
 
 const log = logger("cameras");
@@ -43,7 +43,7 @@ cameraApi.post("/cameras", requireAdmin, (req, res) => {
 cameraApi.patch("/cameras/:id", requireAdmin, (req, res) => {
   try {
     const c = updateCamera(Number(req.params["id"]), (req.body ?? {}) as Record<string, unknown>);
-    logIt(req, `changed camera ${c.name} (channel ${c.channel})`);
+    logIt(req, `changed camera ${c.name} (channel ${c.channel})${c.moved_on ? `, scored from ${c.moved_on}` : ""}`);
     res.json({ ok: true, camera: c });
   } catch (e) { fail(res, e, "saving the camera"); }
 });
@@ -64,6 +64,13 @@ cameraApi.post("/cameras/:id/shot", requireAdmin, async (req, res) => {
     const { file: _f, ...shot } = s;
     res.json({ ok: true, shot });
   } catch (e) { fail(res, e, "taking the picture"); }
+});
+
+/** Days a fixed camera seems to have been moved, from its pictures. */
+cameraApi.get("/cameras/:id/moves", (req, res) => {
+  const c = getCamera(Number(req.params["id"]));
+  if (!c) { res.status(404).json({ error: "No such camera" }); return; }
+  res.json(cameraMoves(c));
 });
 
 /** How far back the NVR's recordings go for a camera. */

@@ -13,13 +13,14 @@ import { db } from "../db/database.js";
 import { logger } from "../logger.js";
 import { today } from "../stock/store.js";
 import { findClips, gotoPreset } from "./nvr-http.js";
-import { asRoi, cleanRoi, measure, type Roi } from "./greenness.js";
+import { asRoi, cleanRoi, findMoves, measure, signature, type Move, type Roi } from "./greenness.js";
 
 const log = logger("cameras");
 export const CAMERA_DIR = join(config.dataDir, "cameras");
 
 /** preset: for a turning (PTZ) camera, the saved position it's turned to for this paddock. */
-export interface Camera { id: number; channel: number; preset: number | null; name: string; feature_id: number; created_at: number; roi: Roi | null }
+/** moved_on: the day a fixed camera was last moved or re-aimed; its pictures before then aren't scored. */
+export interface Camera { id: number; channel: number; preset: number | null; name: string; feature_id: number; created_at: number; roi: Roi | null; moved_on: string | null }
 export interface Shot {
   id: number; camera_id: number; feature_id: number; taken_on: string; taken_at: number; file: string; bytes: number;
   /** Greenness in the camera's grass box (null: no box, or not read yet); gcc_ok 0 with gcc_why: a picture that can't be trusted. */
@@ -39,12 +40,12 @@ export const camerasOn = () => !!(config.nvrHost && config.nvrUser);
 
 export function listCameras(featureId?: number): Camera[] {
   return ((featureId === undefined
-    ? db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE deleted_at IS NULL ORDER BY channel, preset, id").all()
-    : db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel, preset, id").all(featureId)) as CameraRow[]).map(fromRow);
+    ? db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi, moved_on FROM cameras WHERE deleted_at IS NULL ORDER BY channel, preset, id").all()
+    : db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi, moved_on FROM cameras WHERE deleted_at IS NULL AND feature_id = ? ORDER BY channel, preset, id").all(featureId)) as CameraRow[]).map(fromRow);
 }
 
 export function getCamera(id: number): Camera | null {
-  const r = db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as CameraRow | undefined;
+  const r = db.prepare("SELECT id, channel, preset, name, feature_id, created_at, roi, moved_on FROM cameras WHERE id = ? AND deleted_at IS NULL").get(id) as CameraRow | undefined;
   return r ? fromRow(r) : null;
 }
 
@@ -58,7 +59,10 @@ function clean(b: Record<string, unknown>, old?: Camera) {
   if (preset !== null && (!Number.isInteger(preset) || preset < 1 || preset > 255)) throw new CameraError("Preset: the saved position's number on the NVR, e.g. 1, or blank for a fixed camera");
   let roi: Roi | null;
   try { roi = b["roi"] === undefined && old ? old.roi : cleanRoi(b["roi"]); } catch (e) { throw new CameraError((e as Error).message); }
-  return { channel, name, preset, roi };
+  const mv = b["moved_on"] === undefined && old ? old.moved_on : b["moved_on"];
+  const moved_on = mv === null || mv === undefined || mv === "" ? null : String(mv);
+  if (moved_on !== null && !/^\d{4}-\d{2}-\d{2}$/.test(moved_on)) throw new CameraError("Moved on: a date, or blank");
+  return { channel, name, preset, roi, moved_on };
 }
 
 export function addCamera(featureId: number, b: Record<string, unknown>): Camera {
@@ -73,7 +77,7 @@ export function updateCamera(id: number, b: Record<string, unknown>): Camera {
   const old = getCamera(id);
   if (!old) throw new CameraError("That camera doesn't exist any more");
   const c = clean(b, old);
-  db.prepare("UPDATE cameras SET channel = ?, preset = ?, name = ?, roi = ? WHERE id = ?").run(c.channel, c.preset, c.name, c.roi ? JSON.stringify(c.roi) : null, id);
+  db.prepare("UPDATE cameras SET channel = ?, preset = ?, name = ?, roi = ?, moved_on = ? WHERE id = ?").run(c.channel, c.preset, c.name, c.roi ? JSON.stringify(c.roi) : null, c.moved_on, id);
   // A new grass box: read every picture again in the background.
   if (JSON.stringify(c.roi) !== JSON.stringify(old.roi)) void scoreMissing().catch((e) => log.error("greenness failed", e));
   return getCamera(id)!;
@@ -86,7 +90,8 @@ export function removeCamera(id: number): boolean {
 
 /** A paddock's pictures, newest first, with each one's camera name. */
 export function listShots(featureId: number, limit = 400): Array<Shot & { camera: string }> {
-  return db.prepare(`SELECT s.*, c.name AS camera FROM camera_shots s JOIN cameras c ON c.id = s.camera_id
+  return db.prepare(`SELECT s.id, s.camera_id, s.feature_id, s.taken_on, s.taken_at, s.file, s.bytes, s.gcc, s.gcc_ok, s.gcc_why, s.gcc_roi, s.from_recording,
+    c.name AS camera FROM camera_shots s JOIN cameras c ON c.id = s.camera_id
     WHERE s.feature_id = ? ORDER BY s.taken_on DESC, c.channel, s.id DESC LIMIT ?`).all(featureId, limit) as Array<Shot & { camera: string }>;
 }
 
@@ -187,6 +192,7 @@ async function grabShot(cam: Camera): Promise<Shot> {
       .run(cam.id, cam.feature_id, day, Date.now(), file, bytes);
     const shot = getShot(Number(r.lastInsertRowid))!;
     if (cam.roi) await scoreShot(shot, cam.roi).catch((e) => log.warn(`greenness for ${cam.name}: ${String(e)}`));
+    await signShot(shot).catch(() => undefined);
     return getShot(shot.id)!;
   } finally {
     try { unlinkSync(tmp); } catch { /* moved or never made */ }
@@ -228,7 +234,10 @@ export function startCameraShots(): NodeJS.Timeout | null {
   const t = setInterval(tick, 20 * 60_000);
   t.unref();
   setTimeout(tick, 90_000).unref();
-  setTimeout(() => { scoreMissing().catch((e) => log.error("greenness failed", e)); }, 30_000).unref();
+  setTimeout(() => {
+    scoreMissing().catch((e) => log.error("greenness failed", e))
+      .finally(() => { signMissing().catch((e) => log.error("camera fingerprints failed", e)); });
+  }, 30_000).unref();
   return t;
 }
 
@@ -299,6 +308,7 @@ export function startHistory(cam: Camera, from: string): HistoryRun {
       run.error = e instanceof Error ? e.message : String(e);
       log.warn(`filling in ${cam.name}: ${run.error}`);
     } finally {
+      void signMissing().catch(() => undefined);
       run.finished = true; run.day = null;
       log.info(`filled in ${run.added} past day(s) for ${cam.name} from the NVR's recordings`);
     }
@@ -352,4 +362,35 @@ export async function oldestRecording(channel: number): Promise<string | null> {
     if (clips.length) return clips[0]!.start.slice(0, 10);
   }
   return null;
+}
+
+/* ------------------------------ camera moves ------------------------------- */
+
+async function signShot(shot: Shot): Promise<void> {
+  const sig = await signature(join(CAMERA_DIR, shot.file));
+  db.prepare("UPDATE camera_shots SET sig = ? WHERE id = ?").run(sig, shot.id);
+}
+
+let signing: Promise<number> | null = null;
+/** Fingerprints every picture that hasn't one (after a fill-in, and at start-up). */
+export function signMissing(): Promise<number> {
+  if (signing) return signing;
+  signing = (async () => {
+    let n = 0;
+    for (const s of db.prepare("SELECT * FROM camera_shots WHERE sig IS NULL ORDER BY camera_id, taken_on").all() as Shot[]) {
+      try { await signShot(s); n++; } catch { /* a missing file: skip */ }
+    }
+    if (n) log.info(`fingerprinted ${n} camera picture(s) for spotting moves`);
+    return n;
+  })().finally(() => { signing = null; });
+  return signing;
+}
+
+/** Days a fixed camera's view changed for good, from its pictures' fingerprints; and how many pictures still wait for one. */
+export function cameraMoves(cam: Camera): { moves: Move[]; waiting: number } {
+  if (cam.preset !== null) return { moves: [], waiting: 0 }; // a turning camera moves every day by design
+  const shots = db.prepare("SELECT id, taken_on, sig FROM camera_shots WHERE camera_id = ? AND sig IS NOT NULL ORDER BY taken_on").all(cam.id) as Array<{ id: number; taken_on: string; sig: Buffer }>;
+  const waiting = (db.prepare("SELECT COUNT(*) n FROM camera_shots WHERE camera_id = ? AND sig IS NULL").get(cam.id) as { n: number }).n;
+  if (waiting) void signMissing().catch(() => undefined);
+  return { moves: findMoves(shots), waiting };
 }

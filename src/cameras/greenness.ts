@@ -100,3 +100,64 @@ function score(px: Buffer, mask: Uint8Array): Greenness {
   const why = bright < 35 ? "too dark" : bright > 235 ? "too bright" : colour < 8 ? "no colour (night or fog)" : n < count / 2 ? "mostly black" : null;
   return { gcc: Math.round(gcc * 10000) / 10000, bright: Math.round(bright), colour: Math.round(colour), ok: why === null, why };
 }
+
+/* ---------------------------- spotting camera moves ---------------------------- */
+
+export const SIG_W = 48, SIG_H = 27;
+
+/**
+ * A picture's fingerprint: its edges (fences, trees, the horizon) as a tiny
+ * grey thumbnail. Edges hardly change with light and cloud, but shift
+ * completely when the camera is moved or re-aimed.
+ */
+export function signature(file: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", file, "-vf", `scale=${SIG_W * 2}:${SIG_H * 2},format=gray,sobel,scale=${SIG_W}:${SIG_H}`,
+      "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"], { stdio: ["ignore", "pipe", "pipe"] });
+    const chunks: Buffer[] = [];
+    p.stdout.on("data", (d: Buffer) => chunks.push(d));
+    const timer = setTimeout(() => p.kill("SIGKILL"), 20_000);
+    p.on("error", (e) => { clearTimeout(timer); reject(e); });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      const b = Buffer.concat(chunks);
+      if (code !== 0 || b.length < SIG_W * SIG_H) reject(new Error("couldn't read the picture")); else resolve(b.subarray(0, SIG_W * SIG_H));
+    });
+  });
+}
+
+function normalised(b: Buffer): Float64Array {
+  const v = Float64Array.from(b);
+  const m = v.reduce((a, x) => a + x, 0) / v.length;
+  const sd = Math.sqrt(v.reduce((a, x) => a + (x - m) ** 2, 0) / v.length) || 1;
+  return v.map((x) => (x - m) / sd);
+}
+const likeness = (a: Float64Array, b: Float64Array) => a.reduce((t, x, i) => t + x * b[i]!, 0) / a.length;
+const middle = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s[s.length >> 1] ?? 0; };
+
+export interface Move { date: string; strength: number; before: number; after: number }
+
+/**
+ * Days the view changed for good: the four pictures before a day look much
+ * less like the four after it than they look like each other. Days within a
+ * week of each other count as one move, the strongest. Tested on this
+ * property's cameras: real moves scored 0.5–0.9, cattle, cloud and shadow
+ * under 0.35.
+ */
+export function findMoves(shots: Array<{ id: number; taken_on: string; sig: Buffer }>, threshold = 0.4): Move[] {
+  const K = 4;
+  const v = shots.map((s) => normalised(s.sig));
+  const peaks: Move[] = [];
+  for (let i = K; i <= shots.length - K; i++) {
+    const before = v.slice(i - K, i), after = v.slice(i, i + K);
+    const across = middle(before.flatMap((a) => after.map((b) => likeness(a, b))));
+    const within = middle([...before.slice(1).map((x, k) => likeness(x, before[k]!)), ...after.slice(1).map((x, k) => likeness(x, after[k]!))]);
+    const gap = within - across;
+    if (gap < threshold) continue;
+    const m = { date: shots[i]!.taken_on, strength: Math.round(gap * 100) / 100, before: shots[i - 1]!.id, after: shots[i]!.id };
+    const last = peaks[peaks.length - 1];
+    if (last && (Date.parse(m.date) - Date.parse(last.date)) / 86_400_000 <= 7) { if (m.strength > last.strength) peaks[peaks.length - 1] = m; }
+    else peaks.push(m);
+  }
+  return peaks;
+}
