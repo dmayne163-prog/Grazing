@@ -150,6 +150,17 @@ export const config = {
   optiweighHour: num("OPTIWEIGH_HOUR", 6),
 
   /**
+   * Cibo Labs' PastureKey API: the client ID and secret Cibo issued, and the
+   * property's ID in PastureKey. The secret is a password: local.env on the
+   * server only, never git. With none set, PastureKey comes in by file import.
+   */
+  ciboClientId: str("CIBO_CLIENT_ID", ""),
+  ciboClientSecret: str("CIBO_CLIENT_SECRET", ""),
+  ciboPropertyId: str("CIBO_PROPERTY_ID", ""),
+  /** Local hour after which the day's PastureKey fetch runs. */
+  ciboHour: num("CIBO_HOUR", 7),
+
+  /**
    * The automatic rain gauge: a tipping bucket wired to a pulse-meter input
    * on a Cerbo GX, read over the Cerbo's "MQTT on LAN". The address is a LAN
    * IP, so it lives in local.env, never in git. With none set it's off.

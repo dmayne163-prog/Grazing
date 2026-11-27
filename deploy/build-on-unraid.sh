@@ -55,6 +55,11 @@ RAIN_PULSE_INSTANCE="${RAIN_PULSE_INSTANCE:-}"
 NVR_HOST="${NVR_HOST:-}"
 NVR_USER="${NVR_USER:-}"
 NVR_PASS="${NVR_PASS:-}"
+# Cibo Labs' PastureKey API: client ID, secret and property ID from Cibo. The
+# secret is a password — local.env only, never git.
+CIBO_CLIENT_ID="${CIBO_CLIENT_ID:-}"
+CIBO_CLIENT_SECRET="${CIBO_CLIENT_SECRET:-}"
+CIBO_PROPERTY_ID="${CIBO_PROPERTY_ID:-}"
 
 echo "==> building $IMAGE"
 docker build -t "$IMAGE" .
@@ -87,6 +92,9 @@ docker run -d \
   -e NVR_HOST="$NVR_HOST" \
   -e NVR_USER="$NVR_USER" \
   -e NVR_PASS="$NVR_PASS" \
+  -e CIBO_CLIENT_ID="$CIBO_CLIENT_ID" \
+  -e CIBO_CLIENT_SECRET="$CIBO_CLIENT_SECRET" \
+  -e CIBO_PROPERTY_ID="$CIBO_PROPERTY_ID" \
   "$IMAGE"
 
 echo

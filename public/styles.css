@@ -759,3 +759,10 @@ table.register tr.voided td:nth-child(4) { text-decoration: line-through; }
 .planlegend li.dim { opacity: 0.45; }
 .planlegend .plfocus { display: inline-flex; align-items: center; gap: 6px; text-align: left; }
 .planlegend .plfocus.on b { text-decoration: underline; }
+
+/* Cibo feed map in Layers: its controls and colour key. */
+#ciboBox { padding: 0 0 6px 18px; }
+#ciboBox .f { margin: 4px 0; }
+#ciboBox select { width: 100%; }
+.ciboscale { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; }
+.cibokey { display: inline-flex; align-items: center; font-size: 11px; }

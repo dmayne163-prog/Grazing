@@ -598,6 +598,11 @@ CREATE TABLE IF NOT EXISTS settings (
     ["captured_pct", "REAL"],        // how much of the paddock the satellite saw clearly
     ["green", "REAL"],               // green (growing) part of the TSDM, kg/ha
     ["green_change_rate", "REAL"],
+    ["dead", "REAL"],                // dead (dry) part of the TSDM, kg/ha
+    ["fc_green", "REAL"],            // ground cover: green, dead and bare, % of the paddock
+    ["fc_dead", "REAL"],
+    ["fc_bare", "REAL"],
+    ["signal", "TEXT"],              // Cibo's signal strength for the figure: good, low or poor
   ] as const) {
     if (!pastureCols.includes(col)) db.exec(`ALTER TABLE pasture_obs ADD COLUMN ${col} ${type}`);
   }

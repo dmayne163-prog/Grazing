@@ -58,12 +58,47 @@ export async function renderPasture(el, ctx) {
     return;
   }
 
-  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}<div id="satellite"></div>${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}<div id="longTerm"></div>${importBtn}`;
+  el.innerHTML = `${paddocks.length ? '<div id="outlook"><h3>Outlook</h3><p class="muted small">Working out the outlook…</p></div>' : ""}${paddockSection(paddocks, ctx)}<div id="ciboApi"></div><div id="satellite"></div>${farm.length ? farmSection(farm, data.coverage, paddocks.length > 0) : ""}<div id="longTerm"></div>${importBtn}`;
   bind();
+  loadCiboApi(el.querySelector("#ciboApi"), ctx, () => renderPasture(el, ctx));
   loadSatellite(el.querySelector("#satellite"), ctx, () => renderPasture(el, ctx));
   if (farm.length) drawPasture(el.querySelector("#pastureChart"), farm);
   loadOutlook(el.querySelector("#outlook"), ctx);
   loadLongTerm(el.querySelector("#longTerm"), ctx);
+}
+
+/* ------------------------------ Cibo's API ------------------------------ */
+
+/** Whether PastureKey comes in by itself each morning, and when it last did. */
+async function loadCiboApi(host, ctx, reload) {
+  if (!host) return;
+  let s;
+  try { s = await get("/api/cibo/status"); } catch { return; }
+  if (!host.isConnected) return;
+  if (!s.configured) { host.innerHTML = ""; return; }
+  const when = (t) => new Date(t).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  const l = s.last;
+  host.innerHTML = `
+    <h3>PastureKey from Cibo</h3>
+    <p class="small">Fetched from Cibo automatically each morning${l?.newest ? `; the newest reading is from <b>${fmtDay(l.newest)}</b>` : ""}.</p>
+    ${s.running ? '<p class="muted small">Fetching from Cibo now…</p>'
+      : l ? (l.ok
+        ? `<p class="muted small">Last fetched ${when(l.at)}: ${l.added} new reading${l.added === 1 ? "" : "s"}${l.updated ? `, ${l.updated} revised by Cibo` : ""}.</p>`
+        : `<p class="note warn small">The last fetch, ${when(l.at)}, failed: ${escapeHtml(l.error || "unknown error")}</p>`)
+      : '<p class="muted small">Not fetched yet.</p>'}
+    ${l?.unmatched?.length ? `<p class="note warn small">Cibo has paddocks the app couldn't match by name, so their readings are skipped: <b>${l.unmatched.map(escapeHtml).join(", ")}</b>. Rename the paddock here or in Cibo's Paddock Editor so the names match.</p>` : ""}
+    ${ctx.canEdit && !s.running ? '<div class="btns"><button class="btn" id="ciboFetch">Fetch now</button></div>' : ""}`;
+  host.querySelector("#ciboFetch")?.addEventListener("click", async () => {
+    try { await send("POST", "/api/cibo/sync", {}); } catch (e) { ctx.toast(e.message, { error: true }); return; }
+    loadCiboApi(host, ctx, reload);
+  });
+  // While it runs, look again every few seconds; when it's done, redraw the tab with the new readings.
+  if (s.running) setTimeout(async () => {
+    let n;
+    try { n = await get("/api/cibo/status"); } catch { return; }
+    if (!host.isConnected) return;
+    if (n.running) loadCiboApi(host, ctx, reload); else reload();
+  }, 5000);
 }
 
 /* ---------------------------- satellite estimate ---------------------------- */
@@ -481,9 +516,12 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
       ${satNewer ? `<dt>${fmtDay(sLast.date)}</dt><dd><b>${kg(sLast.tsdm)}</b>${sLast.error ? ` <span class="muted">± ${Math.round(sLast.error)}</span>` : ""} <span class="muted">satellite estimate${sLast.green !== null ? `, ${kg(sLast.green)} of it green` : ""}</span></dd>` : ""}
       <dt>${fmtDay(last.date)}</dt><dd><b>${kg(last.tsdm)}</b>${last.error ? ` <span class="muted">± ${Math.round(last.error)}</span>` : ""}${satNewer ? ' <span class="muted">PastureKey\'s last</span>' : onlySat ? ' <span class="muted">satellite estimate</span>' : ""} · <span class="trend ${t.cls}">${t.arrow}</span> ${t.word}${last.change_rate !== null ? ` <span class="muted">(${last.change_rate > 0 ? "+" : ""}${last.change_rate} kg/ha a day)</span>` : ""}</dd>
       <dt>Green</dt><dd>${kg(last.green)}${greenShare !== null ? ` <span class="muted">(${greenShare}% of it)</span>` : ""}</dd>
+      ${last.dead != null ? `<dt>Dead</dt><dd>${kg(last.dead)}</dd>` : ""}
+      ${last.fc_green != null ? `<dt>Ground cover</dt><dd>${Math.round(last.fc_green)}% green · ${Math.round(last.fc_dead ?? 0)}% dead · <b>${Math.round(last.fc_bare ?? 0)}% bare</b></dd>` : ""}
       <dt>Feed on offer</dt><dd>${areaHa ? `${Math.round((last.tsdm * areaHa) / 1000).toLocaleString("en-AU")} t of dry matter` : "—"}</dd>
       ${monthAgo ? `<dt>A month before</dt><dd>${kg(monthAgo.tsdm)} <span class="muted">${fmtDay(monthAgo.date)}</span></dd>` : ""}
     </dl>
+    ${last.signal === "low" || last.signal === "poor" ? `<p class="muted tiny">Cibo rates the signal behind the latest figure <b>${last.signal}</b>: few clear passes lately, so it's less certain and the pasture model leans on it less.</p>` : ""}
     ${last.captured_pct !== null && last.captured_pct < 50 ? `<p class="muted tiny">The satellite saw only ${Math.round(last.captured_pct)}% of the paddock clearly on that pass (cloud), so the latest figure leans on Cibo's model.</p>` : ""}
     <div class="legend">
       <span><i class="sw sw-pasture"></i>Total pasture${sat.length ? " (PastureKey)" : onlySat ? " (satellite estimate)" : ""}</span>
@@ -495,10 +533,11 @@ export async function renderPaddockPasture(el, featureId, areaHa, stillCurrent) 
     <div class="rainchart" id="paddockPastureChart"></div>
     <div id="paddockOutlook"></div>
     <details class="gap-top"><summary class="small">Readings as a table</summary>
-      <table class="list"><thead><tr><th>Date</th><th class="num">Pasture</th><th class="num">Green</th><th class="num">Change a day</th><th class="num">Seen clearly</th></tr></thead><tbody>
+      <table class="list"><thead><tr><th>Date</th><th class="num">Pasture</th><th class="num">Green</th>${series.some((r) => r.dead != null) ? '<th class="num">Dead</th><th class="num">Bare ground</th>' : ""}<th class="num">Change a day</th><th class="num">Seen clearly</th></tr></thead><tbody>
         ${[...series].reverse().map((r) => `<tr><td>${fmtDay(r.date)}</td><td class="num">${kg(r.tsdm)}</td><td class="num muted">${kg(r.green)}</td>
+          ${series.some((x) => x.dead != null) ? `<td class="num muted">${kg(r.dead)}</td><td class="num muted">${r.fc_bare == null ? "—" : `${Math.round(r.fc_bare)}%`}</td>` : ""}
           <td class="num muted">${r.change_rate === null ? "—" : `${r.change_rate > 0 ? "+" : ""}${r.change_rate}`}</td>
-          <td class="num muted">${r.captured_pct === null ? "—" : `${Math.round(r.captured_pct)}%`}</td></tr>`).join("")}
+          <td class="num muted">${r.captured_pct === null ? "—" : `${Math.round(r.captured_pct)}%`}${r.signal ? ` · ${r.signal}` : ""}</td></tr>`).join("")}
       </tbody></table>
     </details>`;
   drawPaddockPasture(el.querySelector("#paddockPastureChart"), series, periods, null, sat);

@@ -217,14 +217,17 @@ export function aePerHead(): (mobId: number, day: number) => number {
   };
 }
 
+/** How much a PastureKey figure counts, by Cibo's signal strength; none given (file imports) counts fully. */
+const SIGNAL_WEIGHT: Record<string, number> = { good: 1, low: 0.7, poor: 0.4 };
+
 function loadInputs(): Inputs | null {
   const feats = db.prepare(
     "SELECT id, name, subtype, area_ha FROM features WHERE kind = 'paddock' AND deleted_at IS NULL"
   ).all() as Array<{ id: number; name: string; subtype: string | null; area_ha: number | null }>;
   const cells = paddockCells();
   const obsRows = db.prepare(
-    "SELECT feature_id, date, tsdm_p50, green, captured_pct FROM pasture_obs WHERE source = 'cibo-pasturekey' AND feature_id != 0 ORDER BY date"
-  ).all() as Array<{ feature_id: number; date: string; tsdm_p50: number; green: number | null; captured_pct: number | null }>;
+    "SELECT feature_id, date, tsdm_p50, green, captured_pct, signal FROM pasture_obs WHERE source = 'cibo-pasturekey' AND feature_id != 0 ORDER BY date"
+  ).all() as Array<{ feature_id: number; date: string; tsdm_p50: number; green: number | null; captured_pct: number | null; signal: string | null }>;
   if (!obsRows.length) return null;
   const lastWeather = db.prepare("SELECT MIN(last_date) d FROM climate_cells WHERE last_date IS NOT NULL").get() as { d: string | null };
   if (!lastWeather.d) return null;
@@ -242,7 +245,8 @@ function loadInputs(): Inputs | null {
   for (const r of obsRows) {
     const p = byId.get(r.feature_id);
     // A clear view counts for more than a cloudy pass Cibo has filled in.
-    if (p) p.obs.push({ day: dayNo(r.date), tsdm: r.tsdm_p50, green: r.green, w: 0.3 + 0.7 * Math.min(1, (r.captured_pct ?? 0) / 100) });
+    // Cibo's own signal strength (from the API) counts too: few clear passes behind a figure, less weight.
+    if (p) p.obs.push({ day: dayNo(r.date), tsdm: r.tsdm_p50, green: r.green, w: (0.3 + 0.7 * Math.min(1, (r.captured_pct ?? 0) / 100)) * (SIGNAL_WEIGHT[r.signal ?? ""] ?? 1) });
   }
   // The satellite estimate carries on where PastureKey stops: the newest one
   // after the paddock's last PastureKey reading, if the estimate is in use.

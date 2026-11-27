@@ -16,6 +16,7 @@ import { openNlisCheck } from "./nlischeck.js";
 import { openUsers } from "./users.js";
 import { forgetRotation, getPlan, openPlan, renderRotation } from "./plan.js";
 import { PlanLayer, colourOf, planMobs, shortName } from "./planlayer.js";
+import { CiboLayer, ciboControls } from "./cibolayer.js";
 import { loadNotes, notesSectionHtml } from "./notes.js";
 import { loadPlantings, plantingsSectionHtml } from "./plantings.js";
 import { feedCheckSectionHtml, loadFeedChecks } from "./feedcheck.js";
@@ -663,6 +664,12 @@ function layersHtml() {
       </label>
       <div id="planLegend">${planLegendHtml()}</div>
       <label>
+        <input type="checkbox" data-cibolayer ${localGet("ciboLayer") === "1" ? "checked" : ""}>
+        <span class="swatch" data-colour="#3f8f3a"></span>
+        Cibo feed map: where the feed is within each paddock
+      </label>
+      <div id="ciboBox"></div>
+      <label>
         <input type="checkbox" data-mobs ${localGet("hideMobs") === "1" ? "" : "checked"}>
         <span class="swatch" data-colour="#4FA9D6"></span>
         Mobs
@@ -787,6 +794,17 @@ function bindOverview() {
   });
   const planLg = $("#planLegend", body);
   if (planLg) bindPlanLegend(planLg);
+  const ciboToggle = $("[data-cibolayer]", body);
+  const ciboBox = $("#ciboBox", body);
+  const ciboPrefs = { get: localGet, set: localSet };
+  if (ciboToggle && ciboBox) {
+    if (ciboToggle.checked) ciboControls(ciboBox, ciboLayer, ciboPrefs);
+    ciboToggle.onchange = () => {
+      localSet("ciboLayer", ciboToggle.checked ? "1" : "0");
+      if (ciboToggle.checked) ciboControls(ciboBox, ciboLayer, ciboPrefs);
+      else { ciboLayer.hide(); ciboBox.innerHTML = ""; }
+    };
+  }
   const planToggle = $("[data-planlayer]", body);
   if (planToggle) planToggle.onchange = async () => {
     localSet("planLayer", planToggle.checked ? "1" : "0");
@@ -896,6 +914,8 @@ function startImport(kind, mobId = null) {
 /* ------------------------------ rotation plan layer ------------------------------ */
 
 let planLayer = null;
+/** Cibo's feed maps over the farm map, when ticked in Layers. */
+let ciboLayer = null;
 let shownPlan = null;
 /** Draws the rotation plan on the map, if that layer is on. */
 async function drawPlanLayer() {
@@ -1507,6 +1527,11 @@ async function start() {
   });
   if (localGet("hideMobs") === "1") mobLayer.setVisible(false);
   planLayer = new PlanLayer(farm);
+  ciboLayer = new CiboLayer(farm);
+  // Ticked last time: show the same map and day again (the Layers tab fills in its controls when opened).
+  if (localGet("ciboLayer") === "1" && localGet("ciboMap") && localGet("ciboDate")) {
+    ciboLayer.load().then((info) => { if (info.configured && info.dates.length) ciboLayer.show(localGet("ciboMap"), info.dates.includes(localGet("ciboDate")) ? localGet("ciboDate") : info.dates[0]); }).catch(() => {});
+  }
   if (localGet("planLayer") === "1") { planLayer.setVisible(true); drawPlanLayer(); }
   await loadStock();
   try {

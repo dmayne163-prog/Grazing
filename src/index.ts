@@ -21,6 +21,7 @@ import { plantingApi } from "./api/planting-routes.js";
 import { feedCheckApi } from "./api/feedcheck-routes.js";
 import { cameraApi } from "./api/camera-routes.js";
 import { startCameraShots } from "./cameras/cameras.js";
+import { ciboApi, ciboTiles, startCiboApiSync } from "./pasture/cibo-api.js";
 import { attachUser, needsSetup, requireAuth } from "./auth/middleware.js";
 import { accessConfigured, initAccess, requireAccess } from "./auth/cloudflare.js";
 import { startRateLimitSweeper } from "./auth/ratelimit.js";
@@ -89,7 +90,9 @@ app.use("/api", notesApi);
 app.use("/api", plantingApi);
 app.use("/api", feedCheckApi);
 app.use("/api", cameraApi);
+app.use("/api", requireAuth, ciboApi);
 
+app.use("/tiles/cibo", requireAuth, ciboTiles);
 app.use("/tiles", requireAuth, tiles);
 
 const vendorOpts = { etag: true, maxAge: "7d", index: false } as const;
@@ -133,6 +136,7 @@ const climateTimer = startClimateSync();
 const optiweighTimer = startOptiweighSync();
 const sentinelTimer = startSentinelSync();
 const cameraTimer = startCameraShots();
+const ciboTimer = startCiboApiSync();
 const rainGauge = startAutoGauge();
 // Mobs whose animals were weighed more recently than the mob itself catch up.
 setTimeout(() => {
@@ -177,6 +181,7 @@ function shutdown(signal: string) {
   clearInterval(backupTimer);
   clearInterval(climateTimer);
   clearInterval(optiweighTimer);
+  clearInterval(ciboTimer);
   clearInterval(sentinelTimer);
   if (cameraTimer) clearInterval(cameraTimer);
   rainGauge?.end(true);

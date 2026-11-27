@@ -270,7 +270,7 @@ export function paddockLatest(): PaddockLatest[] {
 
 export function paddockSeries(featureId: number) {
   return db.prepare(`
-    SELECT date, tsdm_p50 AS tsdm, tsdm_error AS error, green, change_rate, captured_pct
+    SELECT date, tsdm_p50 AS tsdm, tsdm_error AS error, green, change_rate, captured_pct, dead, fc_green, fc_dead, fc_bare, signal
     FROM pasture_obs WHERE feature_id = ? AND source = ? ORDER BY date
   `).all(featureId, PK);
 }
